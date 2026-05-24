@@ -37,7 +37,7 @@ app/
    ```
 3. Rode o Streamlit:
    ```bash
-   streamlit run app/app.py
+   streamlit run app/main.py
    ```
 4. Abra no navegador o endereço mostrado no terminal (normalmente http://localhost:8501).
 

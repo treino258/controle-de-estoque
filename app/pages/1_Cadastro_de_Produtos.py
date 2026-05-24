@@ -1,9 +1,20 @@
 import streamlit as st
+
+st.set_page_config(
+    page_title="Controle de Estoque",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
 from sqlalchemy.exc import IntegrityError
 
+
 from app.database.connection import SessionLocal
-from app.models.product import Product
-from app.services.inventory_service import create_product
+from app.models import Product
+from app.services.inventory_service import (
+    create_product,
+    delete_product,
+)
 
 st.header("1) Cadastro de Produtos")
 st.write(
@@ -11,44 +22,100 @@ st.write(
     "devem ser cadastrados separadamente."
 )
 
+controla_abertura = st.checkbox("Controla abertura?")
+
 with st.form("form_produto"):
+
     nome = st.text_input("Nome do produto")
     categoria = st.selectbox(
         "Categoria", ["matéria-prima", "produto final", "consumível"]
     )
-    unidade_medida = st.text_input("Unidade de medida (ex.: litro, kg, unidade)")
-    estoque_minimo = st.number_input("Estoque mínimo", min_value=0.0, step=1.0)
+    unidade_medida = st.text_input("Unidade de medida")
+    estoque_minimo = st.number_input("Estoque mínimo", min_value=0.0)
+
+    validade_apos_abertura = None
+    if controla_abertura:
+        validade_apos_abertura = st.number_input(
+            "Validade após aberto (dias)",
+            min_value=1,
+            step=1
+        )
+
     submitted = st.form_submit_button("Salvar produto")
 
 if submitted:
+
     db = SessionLocal()
+
     try:
-        create_product(db, nome, categoria, unidade_medida, estoque_minimo)
+        create_product(
+            db,
+            nome,
+            categoria,
+            unidade_medida,
+            estoque_minimo,
+            controla_abertura,
+            validade_apos_abertura
+        )
+
         st.success("Produto cadastrado com sucesso!")
+        st.rerun()
+
     except IntegrityError:
         db.rollback()
         st.error("Já existe um produto com esse nome.")
+
+    except Exception as e:
+        db.rollback()
+        st.error(f"Erro ao salvar produto: {e}")
+
     finally:
         db.close()
 
-st.subheader("Produtos cadastrados")
 db = SessionLocal()
+st.subheader("Produtos cadastrados")
 products = db.query(Product).order_by(Product.nome).all()
-db.close()
 
 if products:
-    st.dataframe(
-        [
-            {
-                "ID": p.id,
-                "Nome": p.nome,
-                "Categoria": p.categoria,
-                "Unidade": p.unidade_medida,
-                "Estoque mínimo": p.estoque_minimo,
-            }
-            for p in products
-        ],
-        use_container_width=True,
+
+    header1, header2, header3, header4, header5 = st.columns(
+        [3, 2, 2, 2, 1]
     )
+
+    header1.markdown("**Nome**")
+    header2.markdown("**Categoria**")
+    header3.markdown("**Unidade**")
+    header4.markdown("**Estoque mínimo**")
+    header5.markdown("**Excluir**")
+
+    for product in products:
+
+        col1, col2, col3, col4, col5 = st.columns(
+            [3, 2, 2, 2, 1]
+        )
+
+        col1.write(product.nome)
+        col2.write(product.categoria)
+        col3.write(product.unidade_medida)
+        col4.write(product.estoque_minimo)
+
+        if col5.button(
+            "🗑️",
+            key=f"delete_{product.id}",
+        ):
+
+            db = SessionLocal()
+
+            delete_product(db, product.id)
+
+            db.close()
+
+            st.success(
+                f"{product.nome} excluído com sucesso!"
+            )
+
+            st.rerun()
 else:
     st.info("Nenhum produto cadastrado ainda.")
+
+

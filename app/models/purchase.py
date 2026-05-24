@@ -9,7 +9,7 @@ Vantagem: evita inconsistência e preserva histórico completo.
 from sqlalchemy import Column, Date, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
-from app.models.base import Base
+from app.database.connection import Base
 
 
 class Purchase(Base):

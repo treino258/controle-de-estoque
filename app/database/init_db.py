@@ -1,8 +1,9 @@
 """Criação das tabelas do projeto."""
 
 from app.database.connection import engine
-from app.models import Base
-
+import app.models  
+from app.models.opened_product import OpenedProduct
+from app.database.connection import Base, engine
 
 def init_db() -> None:
     """Cria as tabelas caso ainda não existam."""
