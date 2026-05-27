@@ -78,18 +78,21 @@ def get_current_stock_by_product(db: Session) -> list[dict]:
     )
 
     saidas = (
-        db.query(
-            OpenedProduct.produto_id,
-            func.sum(
-                case(
-                    (OpenedProduct.estornado == False, OpenedProduct.quantidade),
-                    else_=0
-                )
-            ).label("saida")
-        )
-        .group_by(OpenedProduct.produto_id)
-        .subquery()
+    db.query(
+        OpenedProduct.produto_id,
+        func.sum(
+            case(
+                (
+                    OpenedProduct.status != "estornado",
+                    OpenedProduct.quantidade
+                ),
+                else_=0
+            )
+        ).label("saida")
     )
+    .group_by(OpenedProduct.produto_id)
+    .subquery()
+)
 
     rows = (
         db.query(
@@ -275,5 +278,18 @@ def revert_opened_product(db, opened_id: int):
     if not opened:
         return
 
-    opened.estornado = True
+    opened.status = "estornado"
+    db.commit()
+
+def finish_opened_product(db, opened_id: int):
+
+    opened = db.query(OpenedProduct).filter(
+        OpenedProduct.id == opened_id
+    ).first()
+
+    if not opened:
+        return
+
+    opened.status = "consumido"
+
     db.commit()

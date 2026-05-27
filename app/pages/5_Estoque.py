@@ -6,6 +6,7 @@ from sqlalchemy import func, delete
 from app.database.connection import SessionLocal
 from app.models import OpenedProduct
 from app.services.inventory_service import (
+    finish_opened_product,
     get_current_stock_by_product,
     open_product, revert_opened_product,
 )
@@ -32,6 +33,7 @@ stock_data = get_current_stock_by_product(db)
 
 opened_products = (
     db.query(OpenedProduct)
+    .filter(OpenedProduct.status == "aberto")
     .order_by(OpenedProduct.validade_aberto.asc())
     .all()
 )
@@ -162,7 +164,7 @@ if opened_products:
 
         with st.container(border=True):
 
-            c1, c2, c3, c4 = st.columns([3, 2, 1, 0.5])
+            c1, c2, c3, c4, c5 = st.columns([3, 2, 1, 0.5, 0.5])
 
             c1.markdown(f"### {produto['nome']}")
 
@@ -187,10 +189,17 @@ if opened_products:
             else:
                 c3.success(f"✅ {dias} dias")
 
-            # 🗑️ BOTÃO DELETE INDIVIDUAL
-            if c4.button("🗑️", key=f"del_{opened.id}"):
+            # ↩️ BOTÃO ESTORNO INDIVIDUAL
+            if c4.button("↩️", key=f"del_{opened.id}"):
                 revert_opened_product(db, opened.id)
                 st.warning("Movimentação estornada!")
+                st.rerun()
+            
+            if c5.button("✅", key=f"finish_{opened.id}"):
+
+                finish_opened_product(db, opened.id)
+
+                st.success("Produto finalizado!")
                 st.rerun()
 
     st.divider()
@@ -205,7 +214,7 @@ if st.button("🧹 Remover produtos expirados", type="primary"):
     if expirados:
         db.query(OpenedProduct).filter(
             OpenedProduct.produto_id.in_(expirados),
-            OpenedProduct.finalizado == False
+            OpenedProduct.status == "aberto"
         ).delete(synchronize_session=False)
 
         db.commit()

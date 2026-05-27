@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer
+from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from app.database.connection import Base
@@ -38,14 +38,12 @@ class OpenedProduct(Base):
         default=1,
     )
 
-    finalizado = Column(
-        Boolean,
-        default=False,
-    )
 
-    estornado = Column(
-        Boolean, 
-        default=False
+    # aberto | consumido | vencido | estornado
+    status = Column(
+        String,
+        nullable=False,
+        default="aberto",
     )
 
     product = relationship("Product")
