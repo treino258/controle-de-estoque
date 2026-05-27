@@ -5,291 +5,373 @@ lógica de negócio na interface (Streamlit pages).
 """
 
 from datetime import date, timedelta
+from typing import Optional
 
 from sqlalchemy import func, case
 from sqlalchemy.orm import Session
 
-from app.models import Product, OpenedProduct, Purchase, product
+from app.models import Product, OpenedProduct, Purchase, product, StockMovement
 
 
 
-def create_product(
-    db: Session,
-    nome: str,
-    categoria: str,
-    unidade_medida: str,
-    estoque_minimo: float,
-    controla_abertura: bool = False,
-    validade_apos_abertura: int | None = None,
-) -> Product:
-    product = Product(
-        nome=nome.strip(),
-        categoria=categoria,
-        unidade_medida=unidade_medida.strip(),
-        estoque_minimo=estoque_minimo,
-        controla_abertura=controla_abertura,
-        validade_apos_abertura=validade_apos_abertura,
+
+
+def get_estoque_fechado(session: Session, product_id: int) -> float:
+    """
+    Estoque fechado = unidades compradas e ainda não abertas.
+ 
+    Cálculo:
+        SUM(entradas + estornos) - SUM(aberturas + perdas de fechado)
+    """
+    result = (
+        session.query(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (StockMovement.tipo.in_(["entrada", "estorno"]), StockMovement.quantidade),
+                        (StockMovement.tipo.in_(["abertura", "perda"]), -StockMovement.quantidade),
+                        (
+                            (StockMovement.tipo == "ajuste"),
+                            case(
+                                (StockMovement.direcao == "entrada", StockMovement.quantidade),
+                                else_=-StockMovement.quantidade,
+                            ),
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            )
+        )
+        .filter(StockMovement.product_id == product_id)
+        .filter(StockMovement.tipo != "consumo")  # consumo só afeta aberto
+        .scalar()
     )
-    db.add(product)
-    db.commit()
-    db.refresh(product)
-    return product
+    return float(result)
 
 
-def register_purchase(
-    db: Session,
-    produto_id: int,
+def get_estoque_aberto(session: Session, product_id: int) -> float:
+    """
+    Estoque em uso = unidades abertas mas ainda não totalmente consumidas.
+ 
+    Cálculo:
+        SUM(aberturas) - SUM(consumos)
+    """
+    result = (
+        session.query(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (StockMovement.tipo == "abertura", StockMovement.quantidade),
+                        (StockMovement.tipo == "consumo", -StockMovement.quantidade),
+                        else_=0,
+                    )
+                ),
+                0,
+            )
+        )
+        .filter(StockMovement.product_id == product_id)
+        .scalar()
+    )
+    return float(result)
+
+def get_estoque_total(session: Session, product_id: int) -> float:
+    """Estoque total = fechado + aberto."""
+    return get_estoque_fechado(session, product_id) + get_estoque_aberto(session, product_id)
+
+
+def get_dashboard_estoque(session: Session) -> list[dict]:
+    """
+    Retorna estoque atual de todos os produtos para o dashboard.
+    Uma query por produto é aceitável para MVP; otimizar com subquery quando > 500 produtos.
+    """
+    produtos = session.query(Product).all()
+    resultado = []
+ 
+    for p in produtos:
+        fechado = get_estoque_fechado(session, p.id)
+        aberto = get_estoque_aberto(session, p.id) if p.controla_abertura else 0
+        total = fechado + aberto
+ 
+        resultado.append({
+            "id": p.id,
+            "nome": p.nome,
+            "categoria": p.categoria,
+            "unidade_medida": p.unidade_medida,
+            "estoque_minimo": p.estoque_minimo,
+            "estoque_fechado": fechado,
+            "estoque_aberto": aberto,
+            "estoque_total": total,
+            "abaixo_minimo": total < p.estoque_minimo,
+            "controla_abertura": p.controla_abertura,
+        })
+ 
+    return resultado
+ 
+ 
+def get_produtos_abaixo_minimo(session: Session) -> list[dict]:
+    """Retorna apenas produtos com estoque abaixo do mínimo. Útil para alertas."""
+    return [p for p in get_dashboard_estoque(session) if p["abaixo_minimo"]]
+ 
+ 
+def get_abertos_proximos_vencimento(session: Session, dias: int = 3) -> list[dict]:
+    """
+    Retorna aberturas cuja validade_aberto vence nos próximos N dias.
+    Útil para alertas de desperdício.
+    """
+    limite = date.today() + timedelta(days=dias)
+ 
+    movs = (
+        session.query(StockMovement)
+        .filter(StockMovement.tipo == "abertura")
+        .filter(StockMovement.validade_aberto != None)
+        .filter(StockMovement.validade_aberto <= limite)
+        .filter(StockMovement.validade_aberto >= date.today())
+        .all()
+    )
+ 
+    return [
+        {
+            "produto": m.product.nome,
+            "quantidade": m.quantidade,
+            "validade_aberto": m.validade_aberto,
+            "dias_restantes": (m.validade_aberto - date.today()).days,
+        }
+        for m in movs
+    ]
+ 
+ 
+# ---------------------------------------------------------------------------
+# Registro de movimentações
+# ---------------------------------------------------------------------------
+ 
+def registrar_entrada(
+    session: Session,
+    product_id: int,
     quantidade: float,
     preco_unitario: float,
     data_compra: date,
-    data_validade: date | None,
-    fornecedor: str | None,
-    tempo_entrega: int | None,
-) -> Purchase:
-    # Preço total calculado automaticamente para evitar entrada manual incorreta.
-    preco_total = quantidade * preco_unitario
-
-    purchase = Purchase(
-        produto_id=produto_id,
+    data_validade: Optional[date] = None,
+    fornecedor: Optional[str] = None,
+    tempo_entrega: Optional[int] = None,
+    observacao: Optional[str] = None,
+) -> StockMovement:
+    """Registra uma compra (entrada de estoque)."""
+    mov = StockMovement(
+        product_id=product_id,
+        tipo="entrada",
         quantidade=quantidade,
         preco_unitario=preco_unitario,
-        preco_total=preco_total,
-        data_compra=data_compra,
+        preco_total=quantidade * preco_unitario,
         data_validade=data_validade,
-        fornecedor=fornecedor.strip() if fornecedor else None,
+        fornecedor=fornecedor,
         tempo_entrega=tempo_entrega,
+        data_movimento=data_compra,
+        observacao=observacao,
     )
-    db.add(purchase)
-    db.commit()
-    db.refresh(purchase)
-    return purchase
-
-
-def get_current_stock_by_product(db: Session) -> list[dict]:
-    """Estoque real = entradas - saídas"""
-
-    entradas = (
-        db.query(
-            Purchase.produto_id,
-            func.sum(Purchase.quantidade).label("entrada")
+    session.add(mov)
+    session.commit()
+    session.refresh(mov)
+    return mov
+ 
+ 
+def registrar_abertura(
+    session: Session,
+    product_id: int,
+    quantidade: float,
+    data_abertura: date,
+    validade_aberto: Optional[date] = None,
+    entrada_origem_id: Optional[int] = None,
+    observacao: Optional[str] = None,
+) -> StockMovement:
+    """
+    Registra abertura de uma unidade.
+    Valida se há estoque fechado suficiente antes de abrir.
+    """
+    estoque_atual = get_estoque_fechado(session, product_id)
+    if estoque_atual < quantidade:
+        raise ValueError(
+            f"Estoque fechado insuficiente: disponível {estoque_atual}, "
+            f"solicitado {quantidade}"
         )
-        .group_by(Purchase.produto_id)
-        .subquery()
+ 
+    mov = StockMovement(
+        product_id=product_id,
+        tipo="abertura",
+        quantidade=quantidade,
+        validade_aberto=validade_aberto,
+        entrada_origem_id=entrada_origem_id,
+        data_movimento=data_abertura,
+        observacao=observacao,
     )
-
-    saidas = (
-    db.query(
-        OpenedProduct.produto_id,
-        func.sum(
-            case(
-                (
-                    OpenedProduct.status != "estornado",
-                    OpenedProduct.quantidade
-                ),
-                else_=0
-            )
-        ).label("saida")
-    )
-    .group_by(OpenedProduct.produto_id)
-    .subquery()
-)
-
-    rows = (
-        db.query(
-            Product.id,
-            Product.nome,
-            Product.categoria,
-            Product.unidade_medida,
-            Product.estoque_minimo,
-            Product.controla_abertura,
-            (func.coalesce(entradas.c.entrada, 0) -
-             func.coalesce(saidas.c.saida, 0)).label("estoque_atual")
+    session.add(mov)
+    session.commit()
+    session.refresh(mov)
+    return mov
+ 
+ 
+def registrar_consumo(
+    session: Session,
+    product_id: int,
+    quantidade: float,
+    data_consumo: date,
+    observacao: Optional[str] = None,
+) -> StockMovement:
+    """Registra consumo de produto aberto."""
+    aberto = get_estoque_aberto(session, product_id)
+    if aberto < quantidade:
+        raise ValueError(
+            f"Estoque aberto insuficiente: disponível {aberto}, "
+            f"solicitado {quantidade}"
         )
-        .outerjoin(entradas, entradas.c.produto_id == Product.id)
-        .outerjoin(saidas, saidas.c.produto_id == Product.id)
-        .order_by(Product.nome)
+ 
+    mov = StockMovement(
+        product_id=product_id,
+        tipo="consumo",
+        quantidade=quantidade,
+        data_movimento=data_consumo,
+        observacao=observacao,
+    )
+    session.add(mov)
+    session.commit()
+    session.refresh(mov)
+    return mov
+ 
+ 
+def registrar_perda(
+    session: Session,
+    product_id: int,
+    quantidade: float,
+    motivo: str,
+    data_perda: date,
+    observacao: Optional[str] = None,
+) -> StockMovement:
+    """Registra perda (vencimento, dano, furto). Motivo é obrigatório."""
+    if not motivo or not motivo.strip():
+        raise ValueError("Motivo é obrigatório para registro de perda.")
+ 
+    mov = StockMovement(
+        product_id=product_id,
+        tipo="perda",
+        quantidade=quantidade,
+        motivo=motivo,
+        data_movimento=data_perda,
+        observacao=observacao,
+    )
+    session.add(mov)
+    session.commit()
+    session.refresh(mov)
+    return mov
+ 
+ 
+def registrar_ajuste(
+    session: Session,
+    product_id: int,
+    quantidade: float,
+    direcao: str,  # "entrada" ou "saida"
+    motivo: str,
+    data_ajuste: date,
+    observacao: Optional[str] = None,
+) -> StockMovement:
+    """
+    Ajuste manual de estoque. Motivo e direção são obrigatórios.
+    Use para corrigir diferenças encontradas em inventário físico.
+    """
+    if direcao not in ("entrada", "saida"):
+        raise ValueError("Direção deve ser 'entrada' ou 'saida'.")
+    if not motivo or not motivo.strip():
+        raise ValueError("Motivo é obrigatório para ajuste.")
+ 
+    mov = StockMovement(
+        product_id=product_id,
+        tipo="ajuste",
+        quantidade=quantidade,
+        direcao=direcao,
+        motivo=motivo,
+        data_movimento=data_ajuste,
+        observacao=observacao,
+    )
+    session.add(mov)
+    session.commit()
+    session.refresh(mov)
+    return mov
+ 
+ 
+# ---------------------------------------------------------------------------
+# Histórico e analytics
+# ---------------------------------------------------------------------------
+ 
+def get_historico_produto(
+    session: Session,
+    product_id: int,
+    limit: int = 50,
+) -> list[dict]:
+    """Últimas N movimentações de um produto, ordenadas por data."""
+    movs = (
+        session.query(StockMovement)
+        .filter(StockMovement.product_id == product_id)
+        .order_by(StockMovement.data_movimento.desc(), StockMovement.id.desc())
+        .limit(limit)
         .all()
     )
-
+ 
     return [
         {
-            "produto_id": r.id,
-            "nome": r.nome,
-            "categoria": r.categoria,
-            "unidade_medida": r.unidade_medida,
-            "estoque_minimo": r.estoque_minimo,
-            "controla_abertura": r.controla_abertura,
-            "estoque_atual": float(r.estoque_atual or 0),
+            "id": m.id,
+            "data": m.data_movimento,
+            "tipo": m.tipo,
+            "quantidade": m.get_quantidade_efetiva(),
+            "fornecedor": m.fornecedor,
+            "preco_unitario": m.preco_unitario,
+            "motivo": m.motivo,
+            "observacao": m.observacao,
         }
-        for r in rows
+        for m in movs
     ]
-
-def get_low_stock_products(db: Session) -> list[dict]:
-    stock_data = get_current_stock_by_product(db)
-    return [item for item in stock_data if item["estoque_atual"] < item["estoque_minimo"]]
-
-
-def get_expiring_products(db: Session, days: int = 7) -> list[Purchase]:
-    """Retorna compras com validade nos próximos N dias."""
-    today = date.today()
-    limit_date = today + timedelta(days=days)
-
-    return (
-        db.query(Purchase)
-        .join(Product, Product.id == Purchase.produto_id)
-        .filter(Purchase.data_validade.isnot(None))
-        .filter(Purchase.data_validade >= today)
-        .filter(Purchase.data_validade <= limit_date)
-        .order_by(Purchase.data_validade)
-        .all()
-    )
-
-def get_expired_products(db: Session) -> list[Purchase]:
-    """Retorna compras expiradas."""
-    today = date.today()
-
-    return (
-        db.query(Purchase)
-        .join(Product, Product.id == Purchase.produto_id)
-        .filter(Purchase.data_validade.isnot(None))
-        .filter(Purchase.data_validade < today)
-        .order_by(Purchase.data_validade)
-        .all()
-    )
-
-def get_total_spent_by_product(db: Session) -> list[dict]:
-    rows = (
-        db.query(
-            Product.nome,
-            Purchase.quantidade,
-            func.coalesce(func.sum(Purchase.preco_total), 0).label("preco_total"),
+ 
+ 
+def get_custo_medio(session: Session, product_id: int) -> Optional[float]:
+    """
+    Custo médio ponderado das entradas.
+    Útil para calcular valor do estoque e margem futura.
+    """
+    result = (
+        session.query(
+            func.sum(StockMovement.preco_total),
+            func.sum(StockMovement.quantidade),
         )
-        .outerjoin(Purchase, Purchase.produto_id == Product.id)
-        .group_by(Product.id)
-        .order_by(Product.nome)
-        .all()
+        .filter(StockMovement.product_id == product_id)
+        .filter(StockMovement.tipo == "entrada")
+        .one()
     )
-    return [{"nome": row.nome, "quantidade": row.quantidade, "preco_total": row.preco_total} for row in rows]
+ 
+    total_custo, total_qty = result
+    if not total_qty or total_qty == 0:
+        return None
+ 
+    return total_custo / total_qty
+ 
+ 
+def get_valor_estoque_total(session: Session) -> float:
+    """
+    Valor total do estoque = SUM(estoque_atual * custo_medio) por produto.
+    Útil para o dashboard financeiro.
+    """
+    produtos = session.query(Product).all()
+    total = 0.0
+ 
+    for p in produtos:
+        qty = get_estoque_total(session, p.id)
+        custo = get_custo_medio(session, p.id)
+        if qty > 0 and custo:
+            total += qty * custo
+ 
+    return total
 
-def delete_product(db: Session, product_id: int):
 
-    product = (
-        db.query(Product)
-        .filter(Product.id == product_id)
-        .first()
-    )
 
-    if product:
 
-        # Remove compras relacionadas
-        db.query(Purchase).filter(
-            Purchase.produto_id == product_id
-        ).delete()
 
-        # Remove produto
-        db.delete(product)
 
-        db.commit()
 
-def delete_purchase(db: Session, purchase_id: int):
 
-    purchase = db.query(Purchase).filter(Purchase.id == purchase_id).first()
-
-    if not purchase:
-        return
-
-    # impede deletar lote já consumido parcialmente
-    used = db.query(OpenedProduct).filter(
-        OpenedProduct.purchase_id == purchase_id
-    ).first()
-
-    if used:
-        raise Exception("Não pode deletar lote já utilizado")
-
-    db.delete(purchase)
-    db.commit()      
-
-def open_product(db, product_id: int, quantidade: int):
-
-    product = (
-        db.query(Product)
-        .filter(Product.id == product_id)
-        .first()
-    )
-
-    days = product.validade_apos_abertura if product and product.validade_apos_abertura else 1
-    validade_base = date.today() + timedelta(days=int(days))
-
-    purchases = (
-        db.query(Purchase)
-        .filter(Purchase.produto_id == product_id)
-        .filter(Purchase.quantidade > 0)
-        .order_by(Purchase.data_validade.asc())
-        .all()
-    )
-
-    if not purchases:
-        return []
-
-    restante = quantidade
-    movimentos = []
-
-    for lote in purchases:
-
-        if restante <= 0:
-            break
-
-        disponivel = lote.quantidade
-
-        if disponivel <= 0:
-            continue
-
-        retirar = min(disponivel, restante)
-
-        movimentos.append(
-            OpenedProduct(
-                produto_id=product_id,
-                purchase_id=lote.id,
-                quantidade=retirar,
-                data_abertura=date.today(),
-                validade_aberto=validade_base,
-            )
-        )
-
-        db.add(movimentos[-1])
-        restante -= retirar
-
-    db.commit()
-
-    return movimentos
-
-def delete_opened_product(db, opened_id: int):
-    db.query(OpenedProduct).filter(
-        OpenedProduct.id == opened_id
-    ).delete()
-    db.commit()
-
-def revert_opened_product(db, opened_id: int):
-
-    opened = db.query(OpenedProduct).filter(
-        OpenedProduct.id == opened_id
-    ).first()
-
-    if not opened:
-        return
-
-    opened.status = "estornado"
-    db.commit()
-
-def finish_opened_product(db, opened_id: int):
-
-    opened = db.query(OpenedProduct).filter(
-        OpenedProduct.id == opened_id
-    ).first()
-
-    if not opened:
-        return
-
-    opened.status = "consumido"
-
-    db.commit()

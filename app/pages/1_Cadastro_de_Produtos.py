@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from app.database.connection import SessionLocal
 from app.models import Product
 from app.services.inventory_service import (
-    create_product,
+    registrar_entrada,
     delete_product,
 )
 
@@ -48,7 +48,7 @@ if submitted:
     db = SessionLocal()
 
     try:
-        create_product(
+        registrar_entrada(
             db,
             nome,
             categoria,
