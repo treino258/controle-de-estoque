@@ -1,6 +1,17 @@
-from database.connection import Base
+from app.database.connection import Base
+from app.models.tenant import Tenant
 from app.models.product import Product
-from app.models.purchase import Purchase
-from app.models.opened_product import OpenedProduct
+from app.models.stock_movement import StockMovement
+from app.models.stock_lot import StockLot
+from app.models.expenses import Expense
+from app.models.sales import Sale
 
-__all__ = ["Base", "Product", "Purchase", "OpenedProduct"]
+__all__ = [
+    "Base",
+    "Tenant",
+    "Product",
+    "StockMovement",
+    "StockLot",
+    "Expense",
+    "Sale",
+]

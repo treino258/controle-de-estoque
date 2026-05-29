@@ -1,25 +1,4 @@
-"""Modelo central de movimentações de estoque.
-
-Substitui Purchase e OpenedProduct por uma tabela única de eventos.
-
-Por que uma tabela única?
-- Histórico auditável completo: cada mudança no estoque é um registro imutável
-- Estoque calculado por soma de movimentações (nunca salvo diretamente)
-- Pronto para análises e ML: cada evento tem contexto, timestamp e custo
-- Sem inconsistência: não existe estoque "manual" que pode dessincronizar
-
-Tipos de movimentação e seus efeitos:
-    entrada  → +quantidade no estoque fechado (compra do fornecedor)
-    abertura → -quantidade do fechado, inicia uso (abre uma unidade)
-    consumo  → -quantidade do estoque em uso (produto usado/esgotado)
-    perda    → -quantidade do fechado ou em uso (venceu, caiu, danificou)
-    ajuste   → correção manual (+/-), sempre com motivo registrado
-    estorno  → +quantidade, desfaz uma movimentação anterior
-
-Direção de cada tipo (para cálculo de estoque):
-    POSITIVO (+): entrada, estorno, ajuste com direcao="entrada"
-    NEGATIVO (-): abertura, consumo, perda, ajuste com direcao="saida"
-"""
+"""Ledger imutável de movimentações de estoque."""
 
 from datetime import datetime
 
@@ -31,24 +10,22 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
+    Numeric,
     String,
 )
 from sqlalchemy.orm import relationship
 
 from app.database.connection import Base
+from app.models.mixins import TenantMixin, TimestampMixin
 
-# Tipos que sempre somam ao estoque
 TIPOS_ENTRADA = {"entrada", "estorno"}
-
-# Tipos que sempre subtraem do estoque
 TIPOS_SAIDA = {"abertura", "consumo", "perda"}
-
-# Tipos que precisam de direção explícita
 TIPOS_COM_DIRECAO = {"ajuste"}
 
 
-class StockMovement(Base):
+class StockMovement(TenantMixin, TimestampMixin, Base):
     __tablename__ = "stock_movements"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -60,7 +37,19 @@ class StockMovement(Base):
         index=True,
     )
 
-    # O que aconteceu
+    # Lote em uso (consumo, perda de aberto)
+    lot_id = Column(
+        Integer,
+        ForeignKey(
+            "stock_lots.id",
+            ondelete="RESTRICT",
+            use_alter=True,
+            name="fk_movement_lot",
+        ),
+        nullable=True,
+        index=True,
+    )
+
     tipo = Column(
         Enum(
             "entrada",
@@ -74,59 +63,75 @@ class StockMovement(Base):
         nullable=False,
     )
 
-    # Sempre positivo — a direção é determinada pelo tipo + direcao
     quantidade = Column(Float, nullable=False)
 
-    # Só relevante para ajuste (entrada/saida); outros tipos têm direção fixa
     direcao = Column(
         Enum("entrada", "saida", name="movement_direction"),
         nullable=True,
     )
 
-    # --- Campos de entrada (compra) ---
-    preco_unitario = Column(Float, nullable=True)
-    preco_total = Column(Float, nullable=True)
-    fornecedor = Column(String, nullable=True)
-    tempo_entrega = Column(Integer, nullable=True)  # dias (útil para ML)
-    data_validade = Column(Date, nullable=True)     # validade do lote comprado
-
-    # --- Campos de abertura ---
-    validade_aberto = Column(Date, nullable=True)   # validade após abrir
-
-    # Referência à movimentação de entrada que originou esta abertura
-    # Útil para FEFO (First Expired, First Out) e rastreabilidade de lote
-    entrada_origem_id = Column(
-        Integer,
-        ForeignKey("stock_movements.id"),
+    # Perda: de qual estoque saiu
+    estoque_afetado = Column(
+        Enum("fechado", "aberto", name="estoque_afetado"),
         nullable=True,
     )
 
-    # --- Campos de perda e ajuste ---
-    motivo = Column(String, nullable=True)  # obrigatório para perda e ajuste
+    preco_unitario = Column(Numeric(12, 2), nullable=True)
+    preco_total = Column(Numeric(12, 2), nullable=True)
+    fornecedor = Column(String, nullable=True)
+    tempo_entrega = Column(Integer, nullable=True)
+    data_validade = Column(Date, nullable=True)
 
-    # --- Metadados ---
+    validade_aberto = Column(Date, nullable=True)
+
+    # Referência: abertura←entrada, estorno←movimento, ajuste←origem
+    movimento_referencia_id = Column(
+        Integer,
+        ForeignKey("stock_movements.id"),
+        nullable=True,
+        index=True,
+    )
+
+    motivo = Column(String, nullable=True)
+
     data_movimento = Column(Date, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     observacao = Column(String, nullable=True)
 
-    # Relacionamentos
     product = relationship("Product", back_populates="movements")
-    entrada_origem = relationship("StockMovement", remote_side=[id])
+    lot = relationship(
+        "StockLot",
+        foreign_keys=[lot_id],
+        back_populates="movements",
+    )
+    movimento_referencia = relationship(
+        "StockMovement",
+        remote_side=[id],
+        foreign_keys=[movimento_referencia_id],
+        backref="movimentos_derivados",
+    )
 
-    # Constraints de integridade
     __table_args__ = (
         CheckConstraint("quantidade > 0", name="quantidade_positiva"),
         CheckConstraint(
-            """
-            (tipo = 'ajuste' AND direcao IS NOT NULL)
-            OR (tipo != 'ajuste' AND direcao IS NULL)
-            """,
+            "(tipo = 'ajuste' AND direcao IS NOT NULL) "
+            "OR (tipo != 'ajuste' AND direcao IS NULL)",
             name="ajuste_precisa_direcao",
         ),
+        CheckConstraint(
+            "(tipo NOT IN ('perda', 'ajuste')) "
+            "OR (motivo IS NOT NULL AND length(trim(motivo)) > 0)",
+            name="perda_ajuste_precisa_motivo",
+        ),
+        CheckConstraint(
+            "(tipo != 'perda') OR (estoque_afetado IS NOT NULL)",
+            name="perda_precisa_estoque_afetado",
+        ),
+        Index("ix_movements_product_date", "product_id", "data_movimento"),
+        Index("ix_movements_tipo", "tipo"),
+        Index("ix_movements_validade_aberto", "validade_aberto"),
     )
 
     def get_sinal(self) -> int:
-        """Retorna +1 ou -1 para cálculo de estoque."""
         if self.tipo in TIPOS_ENTRADA:
             return +1
         if self.tipo in TIPOS_SAIDA:
@@ -136,14 +141,11 @@ class StockMovement(Base):
         raise ValueError(f"Tipo desconhecido: {self.tipo}")
 
     def get_quantidade_efetiva(self) -> float:
-        """Quantidade com sinal para somar diretamente no cálculo de estoque."""
         return self.quantidade * self.get_sinal()
 
     def __repr__(self) -> str:
         sinal = "+" if self.get_sinal() > 0 else "-"
         return (
-            f"<StockMovement id={self.id} "
-            f"product_id={self.product_id} "
-            f"tipo={self.tipo} "
-            f"qty={sinal}{self.quantidade}>"
+            f"<StockMovement id={self.id} product_id={self.product_id} "
+            f"tipo={self.tipo} qty={sinal}{self.quantidade}>"
         )

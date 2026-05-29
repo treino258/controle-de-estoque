@@ -12,8 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from app.database.connection import SessionLocal
 from app.models import Product
 from app.services.inventory_service import (
-    registrar_entrada,
-    delete_product,
+    criar_produto,
+    desativar_produto,
+    delete_product
 )
 
 st.header("1) Cadastro de Produtos")
@@ -48,7 +49,7 @@ if submitted:
     db = SessionLocal()
 
     try:
-        registrar_entrada(
+        criar_produto(
             db,
             nome,
             categoria,
@@ -75,11 +76,13 @@ if submitted:
 db = SessionLocal()
 st.subheader("Produtos cadastrados")
 products = db.query(Product).order_by(Product.nome).all()
+ativos = [p for p in products if p.ativo]
+inativos = [p for p in products if not p.ativo]
 
 if products:
 
-    header1, header2, header3, header4, header5 = st.columns(
-        [3, 2, 2, 2, 1]
+    header1, header2, header3, header4, header5, header6 = st.columns(
+        [3, 2, 2, 2, 1, 1]
     )
 
     header1.markdown("**Nome**")
@@ -87,11 +90,12 @@ if products:
     header3.markdown("**Unidade**")
     header4.markdown("**Estoque mínimo**")
     header5.markdown("**Excluir**")
+    header6.markdown("**Desativar/Ativar**")
 
-    for product in products:
+    for product in ativos:
 
-        col1, col2, col3, col4, col5 = st.columns(
-            [3, 2, 2, 2, 1]
+        col1, col2, col3, col4, col5, col6 = st.columns(
+            [3, 2, 2, 2, 1, 1]
         )
 
         col1.write(product.nome)
@@ -115,7 +119,103 @@ if products:
             )
 
             st.rerun()
+        
+        if col6.button(
+            "🚫" if product.ativo else "Ativar",
+            key=f"toggle_{product.id}",
+        ):
+
+
+            estava_ativo = product.ativo
+
+            desativar_produto(db, product.id)
+
+
+            st.success(
+                f"{product.nome} "
+                f"{'desativado' if estava_ativo else 'ativado'} com sucesso!"
+            )
+
+            st.rerun()
+        
+    if inativos:
+
+        st.divider()
+
+        st.subheader("Produtos desativados")
+
+        for product in inativos:
+
+            col1, col2, col3, col4, col5, col6 = st.columns(
+                [3, 2, 2, 2, 1, 1]
+            )
+
+            col1.markdown(
+                f"""
+                <span style="opacity:0.45">
+                    {product.nome}
+                </span>
+                """,
+                unsafe_allow_html=True
+            )
+
+            col2.markdown(
+                f"""
+                <span style="opacity:0.45">
+                    {product.categoria}
+                </span>
+                """,
+                unsafe_allow_html=True
+            )
+
+            col3.markdown(
+                f"""
+                <span style="opacity:0.45">
+                    {product.unidade_medida}
+                </span>
+                """,
+                unsafe_allow_html=True
+            )
+
+            col4.markdown(
+                f"""
+                <span style="opacity:0.45">
+                    {product.estoque_minimo}
+                </span>
+                """,
+                unsafe_allow_html=True
+            )
+
+            # EXCLUIR
+            if col5.button(
+                "🗑️",
+                key=f"delete_inactive_{product.id}",
+            ):
+
+                delete_product(db, product.id)
+
+                st.success(
+                    f"{product.nome} excluído com sucesso!"
+                )
+
+                st.rerun()
+
+            # ATIVAR
+            if col6.button(
+                "Ativar",
+                key=f"activate_{product.id}",
+            ):
+
+                desativar_produto(db, product.id)
+
+                st.success(
+                    f"{product.nome} ativado com sucesso!"
+                )
+
+                st.rerun()
+
 else:
+
     st.info("Nenhum produto cadastrado ainda.")
 
-
+db.close()

@@ -1,19 +1,21 @@
-from datetime import date
+from __future__ import annotations
+
+from datetime import date, timedelta
 
 import streamlit as st
-from sqlalchemy import func, delete
 
 from app.database.connection import SessionLocal
-from app.models import OpenedProduct
+from app.models import Product
 from app.services.inventory_service import (
-    finish_opened_product,
-    get_current_stock_by_product,
-    open_product, revert_opened_product,
+    consumir_lote_completo,
+    get_abertos_proximos_vencimento,
+    get_dashboard_estoque,
+    get_lotes_abertos_detalhados,
+    registrar_abertura,
+    registrar_ajuste,
+    registrar_consumo,
+    registrar_perda,
 )
-
-# =========================================================
-# CONFIG
-# =========================================================
 
 st.set_page_config(
     page_title="Controle de Estoque",
@@ -25,207 +27,304 @@ st.title("📦 Controle de Estoque")
 
 db = SessionLocal()
 
-stock_data = get_current_stock_by_product(db)
-
-# =========================================================
-# PRODUTOS ABERTOS (MAP)
-# =========================================================
-
-opened_products = (
-    db.query(OpenedProduct)
-    .filter(OpenedProduct.status == "aberto")
-    .order_by(OpenedProduct.validade_aberto.asc())
-    .all()
-)
-
-opened_map = {}
-for o in opened_products:
-    opened_map.setdefault(o.produto_id, []).append(o)
-
-# =========================================================
-# FILTRO
-# =========================================================
-
 st.subheader("📊 Estoque atual")
-
 busca = st.text_input("🔍 Buscar produto")
 
-if stock_data:
+try:
+    stock_data = get_dashboard_estoque(db)
 
-    if busca:
-        stock_data = [
-            p for p in stock_data
-            if busca.lower() in p["nome"].lower()
-        ]
+    if stock_data:
+        if busca:
+            stock_data = [
+                p for p in stock_data if busca.lower() in p["nome"].lower()
+            ]
 
-    # =========================================================
-    # HEADER FIXO (mais “clean”)
-    # =========================================================
-
-    col = st.columns([4, 2, 1.2, 1.2, 1.2, 1.2, 1.4])
-
-    col[0].markdown("**🧾 Produto**")
-    col[1].markdown("**📁 Categoria**")
-    col[2].markdown("**📦 Estoque**")
-    col[3].markdown("**⚠️ Mín**")
-    col[4].markdown("**🧊 Abertos**")
-    col[5].markdown("**Qtd**")
-    col[6].markdown("**Abrir**")
-
-    st.divider()
-
-    # =========================================================
-    # LINHAS
-    # =========================================================
-
-    for item in stock_data:
-
-        produto_id = item["produto_id"]
-        total_aberto = sum(o.quantidade for o in opened_map.get(produto_id, []))
-
-        col = st.columns([4, 2, 1.2, 1.2, 1.2, 1.2, 1.4])
-
-        # -------------------------
-        # INFO PRODUTO (fonte maior)
-        # -------------------------
-
-        col[0].markdown(f"<span style='font-size:30px'><b>{item['nome']}</b>  \n<span style='font-size:15px;color:gray'>{item['unidade_medida']}</span>", unsafe_allow_html=True)
-
-        col[1].markdown(f"<span style='font-size:20px'>{item['categoria']}</span>", unsafe_allow_html=True)
-
-        col[2].markdown(f"<span style='font-size:20px;font-weight:600'>{item['estoque_atual']}</span>", unsafe_allow_html=True)
-
-        col[3].markdown(f"<span style='font-size:20px'>{item['estoque_minimo']}</span>", unsafe_allow_html=True)
-
-        col[4].markdown(
-            f"<span style='font-size:20px'>{total_aberto}</span>",
-            unsafe_allow_html=True,
-        )
-
-        # -------------------------
-        # CONTROLE DE ABERTURA (menor e mais compacto)
-        # -------------------------
-
-        controla = item.get("controla_abertura", False)
-        estoque = item["estoque_atual"]
-
-        if controla and estoque > 0:
-
-            qtd = col[5].number_input(
-                "",
-                min_value=1,
-                max_value=max(1, int(estoque)),
-                value=1,
-                key=f"qtd_{produto_id}",
-                label_visibility="collapsed",
-            )
-
-            if col[6].button(
-                "Abrir",
-                key=f"open_{produto_id}",
-                use_container_width=True,
-            ):
-                open_product(db, produto_id, qtd)
-
-                st.success(f"Produto aberto ({qtd})!")
-                st.rerun()
-
-        else:
-            col[5].write("-")
-            col[6].write("")
-
+        col = st.columns([4, 2, 1.1, 1.1, 1.1, 1.1, 1.2, 1.4])
+        col[0].markdown("**🧾 Produto**")
+        col[1].markdown("**📁 Categoria**")
+        col[2].markdown("**📦 Fechado**")
+        col[3].markdown("**🧊 Em uso**")
+        col[4].markdown("**📦 Total**")
+        col[5].markdown("**⚠️ Mín**")
+        col[6].markdown("**Qtd**")
+        col[7].markdown("**Abrir**")
         st.divider()
 
+        for item in stock_data:
+            produto_id = item["id"]
+            fechado = item["estoque_fechado"]
+            em_uso = item["estoque_aberto"]
+            total = item["estoque_total"]
 
+            col = st.columns([4, 2, 1.1, 1.1, 1.1, 1.1, 1.2, 1.4])
 
-
-
-# =========================================================
-# PRODUTOS ABERTOS
-# =========================================================
-
-st.header("🧊 Produtos Abertos")
-
-if opened_products:
-
-    for opened in opened_products:
-
-        produto = next(
-            (p for p in stock_data if p["produto_id"] == opened.produto_id),
-            None
-        )
-        lote = opened.purchase_id
-        
-
-        if not produto:
-            continue
-
-        dias = (opened.validade_aberto - date.today()).days
-
-        with st.container(border=True):
-
-            c1, c2, c3, c4, c5 = st.columns([3, 2, 1, 0.5, 0.5])
-
-            c1.markdown(f"### {produto['nome']}")
-
-            c2.markdown(
-                f"""
-                <div style="text-align:center;">
-                    <div style="font-size:24px;font-weight:700;">
-                        🧊 {opened.quantidade}
-                    </div>
-                    <div style="color:gray;font-size:13px;">
-                        unidades abertas
-                    </div>
-                </div>
-                """,
+            col[0].markdown(
+                (
+                    f"<span style='font-size:30px'><b>{item['nome']}</b>  \n"
+                    f"<span style='font-size:15px;color:gray'>"
+                    f"{item['unidade_medida']}</span>"
+                ),
+                unsafe_allow_html=True,
+            )
+            col[1].markdown(
+                f"<span style='font-size:20px'>{item['categoria']}</span>",
+                unsafe_allow_html=True,
+            )
+            col[2].markdown(
+                f"<span style='font-size:20px;font-weight:600'>{fechado}</span>",
+                unsafe_allow_html=True,
+            )
+            col[3].markdown(
+                f"<span style='font-size:20px'>{em_uso}</span>",
+                unsafe_allow_html=True,
+            )
+            col[4].markdown(
+                f"<span style='font-size:20px'>{total}</span>",
+                unsafe_allow_html=True,
+            )
+            col[5].markdown(
+                f"<span style='font-size:20px'>{item['estoque_minimo']}</span>",
                 unsafe_allow_html=True,
             )
 
-            if dias <= 0:
-                c3.error("🚨 Expirado")
-            elif dias <= 3:
-                c3.warning(f"⚠️ {dias} dias")
+            controla = item.get("controla_abertura", False)
+
+            if controla and fechado > 0:
+                with col[6]:
+                    with st.form(key=f"form_abrir_{produto_id}", border=False):
+                        qtd = st.number_input(
+                            "Qtd",
+                            min_value=1.0,
+                            max_value=float(fechado),
+                            value=1.0,
+                            step=1.0,
+                            label_visibility="collapsed",
+                        )
+                        abrir = st.form_submit_button(
+                            "Abrir",
+                            use_container_width=True,
+                        )
+                col[7].write("")
+                if abrir:
+                    produto = db.get(Product, produto_id)
+                    validade_aberto = None
+                    if produto and produto.validade_apos_abertura:
+                        validade_aberto = date.today() + timedelta(
+                            days=int(produto.validade_apos_abertura)
+                        )
+                    try:
+                        registrar_abertura(
+                            db,
+                            product_id=produto_id,
+                            quantidade=float(qtd),
+                            data_abertura=date.today(),
+                            validade_aberto=validade_aberto,
+                        )
+                        db.expire_all()
+                        st.success(f"Produto aberto ({qtd})!")
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
             else:
-                c3.success(f"✅ {dias} dias")
+                col[6].write("-")
+                col[7].write("")
 
-            # ↩️ BOTÃO ESTORNO INDIVIDUAL
-            if c4.button("↩️", key=f"del_{opened.id}"):
-                revert_opened_product(db, opened.id)
-                st.warning("Movimentação estornada!")
-                st.rerun()
-            
-            if c5.button("✅", key=f"finish_{opened.id}"):
+            st.divider()
 
-                finish_opened_product(db, opened.id)
+    # Lotes em uso (uma lista só — evita duplicar na seção de validade)
+    st.header("🧊 Lotes em uso")
+    lotes = get_lotes_abertos_detalhados(db)
+    proximos_ids = {
+        p["lot_id"] for p in get_abertos_proximos_vencimento(db, dias=3)
+    }
 
-                st.success("Produto finalizado!")
-                st.rerun()
+    if lotes:
+        por_produto: dict[str, int] = {}
+        for lot in lotes:
+            por_produto[lot["produto"]] = por_produto.get(lot["produto"], 0) + 1
 
-    st.divider()
+        for nome, qtd in por_produto.items():
+            if qtd > 1:
+                st.warning(
+                    f"**{nome}**: {qtd} lotes abertos. "
+                    "Se não for intencional, consuma o lote antigo antes de abrir outro."
+                )
 
-if st.button("🧹 Remover produtos expirados", type="primary"):
-    expirados = [
-        o.produto_id
-        for o in opened_products
-        if (o.validade - date.today()).days <= 0
-    ]
-
-    if expirados:
-        db.query(OpenedProduct).filter(
-            OpenedProduct.produto_id.in_(expirados),
-            OpenedProduct.status == "aberto"
-        ).delete(synchronize_session=False)
-
-        db.commit()
-
-        st.success("Produtos expirados removidos!")
-        st.rerun()
+        for lot in lotes:
+            urgente = lot["lot_id"] in proximos_ids
+            with st.container(border=True):
+                c1, c2, c3, c4, c5 = st.columns([2.5, 1, 1.2, 1.5, 1])
+                titulo = f"**{lot['produto']}** — Lote #{lot['lot_id']}"
+                if urgente:
+                    titulo += " ⏳"
+                c1.markdown(titulo)
+                c2.metric("Em uso", lot["quantidade_atual"])
+                if lot["validade"]:
+                    dias = lot["dias_restantes"]
+                    if dias is not None and dias <= 0:
+                        c3.error("Vencido")
+                    elif dias is not None and dias <= 3:
+                        c3.warning(f"{dias} dias")
+                    else:
+                        c3.success(f"{dias} dias")
+                    c4.caption(
+                        f"Validade: {lot['validade'].strftime('%d/%m/%Y')}"
+                    )
+                else:
+                    c3.caption("Sem validade")
+                if c5.button(
+                    "Esgotar",
+                    key=f"esgotar_{lot['lot_id']}",
+                    help="Registra consumo de todo o lote",
+                ):
+                    try:
+                        consumir_lote_completo(db, lot["lot_id"])
+                        db.expire_all()
+                        st.success("Lote esgotado.")
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
     else:
-        st.info("Nenhum produto expirado.")
+        st.info("Nenhum lote em uso.")
 
-# =========================================================
-# FINALIZAÇÃO
-# =========================================================
+    # Ações rápidas
+    st.header("⚙️ Ações rápidas")
 
-db.close()
+    produtos_ativos = (
+        db.query(Product)
+        .filter(Product.ativo.is_(True))
+        .order_by(Product.nome.asc())
+        .all()
+    )
+    opcoes = {p.nome: p.id for p in produtos_ativos}
+    lotes_abertos = get_lotes_abertos_detalhados(db)
+    lotes_por_produto: dict[int, list] = {}
+    for lot in lotes_abertos:
+        lotes_por_produto.setdefault(lot["product_id"], []).append(lot)
+
+    tab1, tab2, tab3 = st.tabs(["✅ Consumo", "🗑️ Perda", "🛠️ Ajuste"])
+
+    with tab1:
+        nome = st.selectbox("Produto", list(opcoes.keys()), key="consumo_produto")
+        pid = opcoes[nome]
+        lotes_prod = lotes_por_produto.get(pid, [])
+        lot_id = None
+        if lotes_prod:
+            lot_labels = {
+                f"Lote #{l['lot_id']} — {l['quantidade_atual']} un."
+                + (
+                    f" (vence {l['validade'].strftime('%d/%m')})"
+                    if l["validade"]
+                    else ""
+                ): l["lot_id"]
+                for l in lotes_prod
+            }
+            modo = st.radio(
+                "Alocação",
+                ["FEFO automático", "Escolher lote"],
+                horizontal=True,
+                key="consumo_modo",
+            )
+            if modo == "Escolher lote":
+                lot_id = lot_labels[
+                    st.selectbox("Lote", list(lot_labels.keys()), key="consumo_lote")
+                ]
+        qty = st.number_input(
+            "Quantidade", min_value=0.01, value=1.0, step=0.5, key="consumo_qty"
+        )
+        obs = st.text_input("Observação (opcional)", key="consumo_obs")
+        with st.form("form_consumo", clear_on_submit=True):
+            enviar = st.form_submit_button("Registrar consumo", type="primary")
+        if enviar:
+            try:
+                registrar_consumo(
+                    db,
+                    pid,
+                    float(qty),
+                    date.today(),
+                    lot_id=lot_id,
+                    observacao=obs or None,
+                )
+                db.expire_all()
+                st.success("Consumo registrado.")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
+    with tab2:
+        nome = st.selectbox("Produto", list(opcoes.keys()), key="perda_produto")
+        pid = opcoes[nome]
+        estoque_afetado = st.selectbox(
+            "Estoque afetado",
+            ["fechado", "aberto"],
+            key="perda_estoque",
+        )
+        lot_id = None
+        if estoque_afetado == "aberto":
+            lotes_prod = lotes_por_produto.get(pid, [])
+            if lotes_prod:
+                modo = st.radio(
+                    "Alocação",
+                    ["FEFO automático", "Escolher lote"],
+                    horizontal=True,
+                    key="perda_modo",
+                )
+                if modo == "Escolher lote":
+                    lot_labels = {
+                        f"Lote #{l['lot_id']} — {l['quantidade_atual']} un.": l["lot_id"]
+                        for l in lotes_prod
+                    }
+                    lot_id = lot_labels[
+                        st.selectbox("Lote", list(lot_labels.keys()), key="perda_lote")
+                    ]
+        qty = st.number_input(
+            "Quantidade", min_value=0.01, value=1.0, step=0.5, key="perda_qty"
+        )
+        motivo = st.text_input("Motivo (obrigatório)", key="perda_motivo")
+        obs = st.text_input("Observação (opcional)", key="perda_obs")
+        with st.form("form_perda", clear_on_submit=True):
+            enviar = st.form_submit_button("Registrar perda", type="primary")
+        if enviar:
+            try:
+                registrar_perda(
+                    db,
+                    pid,
+                    float(qty),
+                    motivo,
+                    date.today(),
+                    estoque_afetado=estoque_afetado,
+                    lot_id=lot_id,
+                    observacao=obs or None,
+                )
+                db.expire_all()
+                st.success("Perda registrada.")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
+    with tab3:
+        nome = st.selectbox("Produto", list(opcoes.keys()), key="ajuste_produto")
+        direcao = st.selectbox("Direção", ["entrada", "saida"], key="ajuste_direcao")
+        qty = st.number_input(
+            "Quantidade", min_value=0.01, value=1.0, step=0.5, key="ajuste_qty"
+        )
+        motivo = st.text_input("Motivo (obrigatório)", key="ajuste_motivo")
+        obs = st.text_input("Observação (opcional)", key="ajuste_obs")
+        if st.button("Registrar ajuste", type="primary"):
+            try:
+                registrar_ajuste(
+                    db,
+                    opcoes[nome],
+                    float(qty),
+                    direcao=direcao,
+                    motivo=motivo,
+                    data_ajuste=date.today(),
+                    observacao=obs or None,
+                )
+                st.success("Ajuste registrado.")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
+finally:
+    db.close()
