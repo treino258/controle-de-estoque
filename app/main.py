@@ -13,6 +13,8 @@ import streamlit as st
 
 from app.database.init_db import init_db
 
+
+
 st.set_page_config(page_title="Controle de Estoque - Cafeteria", layout="wide")
 init_db()
 

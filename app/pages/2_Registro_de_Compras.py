@@ -13,7 +13,13 @@ from app.utils.ui_formater import (
 from app.utils.data_formater import format_validade
 from app.database.connection import SessionLocal
 from app.models import Product, StockMovement
-from app.services.inventory_service import registrar_entrada, registrar_ajuste, get_valor_estoque_total, get_historico_produto, get_dashboard_estoque
+from app.services import (
+    registrar_entrada, 
+    registrar_ajuste, 
+    get_valor_estoque_total, 
+    get_historico_produto, 
+    get_dashboard_estoque,
+    )
 
 
 db = SessionLocal()
@@ -36,6 +42,8 @@ db = SessionLocal()
 products = get_dashboard_estoque(db)
 
 
+
+
 if not products:
     st.warning("Cadastre pelo menos um produto antes de registrar compras.")
     db.close()
@@ -50,8 +58,8 @@ with st.form("form_compra"):
     product_label = st.selectbox("Produto", list(product_options.keys()))
     quantidade = st.number_input("Quantidade", min_value=0.01, step=1.0)
     preco_unitario = st.number_input("Preço unitário (R$)", min_value=0.01, step=0.5)
-    data_compra = st.date_input("Data da compra", value=date.today())
-    data_validade = st.date_input("Data de validade", value=None)
+    data_compra = st.date_input("Data da compra", value=date.today(), format="DD/MM/YYYY")
+    data_validade = st.date_input("Data de validade", value=None, format="DD/MM/YYYY")
     fornecedor = st.text_input("Fornecedor")
     tempo_entrega = st.number_input("Tempo de entrega (dias)", min_value=0, step=1)
 
@@ -63,81 +71,105 @@ if submitted:
 
 
 
-st.subheader("Últimas entradas")
+with st.expander("Últimas entradas"):
+    
 
 
-for p in products:
 
-    historico = get_historico_produto(
-        db,
-        p["id"],
-        limit=10
+    h1, h2, h3, h4, h5, h6, h7 = st.columns(
+        [2, 2, 1.5, 1.5, 1.5, 1.2, 0.8]
     )
 
-    entradas = [
-        m for m in historico
-        if m["tipo"] == "entrada"
-    ]
+    h1.markdown("**Produto**")
+    h2.markdown("**Qtd**")
+    h3.markdown("**Preço Unit.**")
+    h4.markdown("**Preço Total**")
+    h5.markdown("**Data**")
+    h6.markdown("**Status**")
+    h7.markdown("**Ação**")
 
-    ajustes_origem = {
-        m["movimento_referencia_id"]
-        for m in historico
-        if m["movimento_referencia_id"]
-    }
+    st.divider()
 
-    for e in entradas:
 
-        corrigido = e["id"] in ajustes_origem
+
+    for p in products:
+
+        historico = get_historico_produto(
+            db,
+            p["id"],
+            limit=10
+        )
+
+        entradas = [
+            m for m in historico
+            if m["tipo"] == "entrada"
+        ]
+
+        ajustes_origem = {
+            m["movimento_referencia_id"]
+            for m in historico
+            if m["movimento_referencia_id"]
+        }
+
         
-        if corrigido:
-            continue
-        status = "⚠️ Corrigido" if corrigido else "✅ OK"
+        
 
-        valor_unitario = float(e["preco_unitario"] or 0)
+        
+        for e in entradas:
 
-        quantidade = float(e["quantidade"] or 0)
+            corrigido = e["id"] in ajustes_origem
+            
+            if corrigido:
+                continue
+            status = "⚠️ Corrigido" if corrigido else "✅ OK"
 
-        valor_total = valor_unitario * quantidade
+            valor_unitario = float(e["preco_unitario"] or 0)
 
-        c1, c2, c3, c4, c5, c6, c7 = st.columns(
-            [3, 1, 1.2, 1.2, 1.5, 1.2, 0.8]
-        )
+            quantidade = float(e["quantidade"] or 0)
 
-        c1.write(p["nome"])
+            valor_total = valor_unitario * quantidade
 
-        c2.write(f"{quantidade:.0f}")
+        
 
-        c3.write(f"R$ {valor_unitario:.2f}")
-
-        c4.write(f"R$ {valor_total:.2f}")
-
-        c5.write(
-            e["data"].strftime("%d/%m/%Y")
-        )
-
-        c6.write(status)
-
-        if c7.button(
-            "↩️",
-            key=f"ajuste_{e['id']}",
-            disabled=corrigido,
-        ):
-
-            registrar_ajuste(
-                session=db,
-                product_id=p["id"],
-                quantidade=abs(e["quantidade"]),
-                direcao="saida",
-                motivo="Correção de entrada registrada incorretamente",
-                data_ajuste=date.today(),
-                observacao=f"Correção da movimentação {e['id']}",
-                movimento_referencia_id=e["id"],
+            c1, c2, c3, c4, c5, c6, c7 = st.columns(
+                [2, 2, 1.5, 1.5, 1.5, 1.2, 0.8]
             )
 
-            st.success("Entrada corrigida!")
+            c1.write(p["nome"])
 
-            st.rerun()
+            c2.write( f"{quantidade:.0f} {p['unidade_medida']}")
 
-        st.divider()
+            c3.write(f"R$ {valor_unitario:.2f}")
+
+            c4.write(f"R$ {valor_total:.2f}")
+
+            c5.write(
+                e["data"].strftime("%d/%m/%Y")
+            )
+
+            c6.write(status)
+
+            if c7.button(
+                "↩️",
+                key=f"ajuste_{e['id']}",
+                disabled=corrigido,
+            ):
+
+                registrar_ajuste(
+                    session=db,
+                    product_id=p["id"],
+                    quantidade=abs(e["quantidade"]),
+                    direcao="saida",
+                    motivo="Correção de entrada registrada incorretamente",
+                    data_ajuste=date.today(),
+                    observacao=f"Correção da movimentação {e['id']}",
+                    movimento_referencia_id=e["id"],
+                )
+
+                st.success("Entrada corrigida!")
+
+                st.rerun()
+
+            st.divider()
 
 db.close()

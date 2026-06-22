@@ -4,7 +4,7 @@ import streamlit as st
 
 from app.database.connection import SessionLocal
 
-from app.services.inventory_service import (
+from app.services import (
     get_produtos_abaixo_minimo,
     get_abertos_proximos_vencimento,
     get_historico_produto,

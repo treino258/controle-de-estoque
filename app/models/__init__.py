@@ -5,6 +5,9 @@ from app.models.stock_movement import StockMovement
 from app.models.stock_lot import StockLot
 from app.models.expenses import Expense
 from app.models.sales import Sale
+from app.models.recipes import RecipeItem
+from app.models.enums import ProductType
+
 
 __all__ = [
     "Base",
@@ -14,4 +17,7 @@ __all__ = [
     "StockLot",
     "Expense",
     "Sale",
+    "RecipeItem",
+    "ProductType",
+    "RecipeItem",
 ]

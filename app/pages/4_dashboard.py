@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import plotly.express as px
@@ -283,57 +283,129 @@ st.divider()
 # =====================================================
 # TABELA GASTOS
 # =====================================================
+expenses = (
+    db.query(Expense)
+    .filter(Expense.is_deleted == False)
+    .order_by(Expense.data.desc())
+    .all()
+)
 
 st.subheader("📋 Gastos Registrados")
 
+if expenses:
 
-expenses_table = pd.DataFrame([
-    {
-        "Nome": e.nome,
-        "Categoria": e.categoria,
-        "Valor": e.valor,
-        "Data": e.data,
-    }
-    for e in expenses
-])
-
-
-if not expenses_table.empty:
-
-    st.dataframe(
-        expenses_table,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-
-            "Nome": st.column_config.TextColumn(
-                "Nome",
-                width="medium",
-            ),
-
-            "Categoria": st.column_config.TextColumn(
-                "Categoria",
-                width="small",
-            ),
-
-            "Valor": st.column_config.NumberColumn(
-                "Valor",
-                format="R$ %.2f",
-            ),
-
-            "Data": st.column_config.DateColumn(
-                "Data",
-                format="DD/MM/YYYY",
-            ),
-        }
+    cab1, cab2, cab3, cab4, cab5 = st.columns(
+        [3, 2, 2, 2, 1]
     )
+
+    cab1.markdown("**Nome**")
+    cab2.markdown("**Categoria**")
+    cab3.markdown("**Valor**")
+    cab4.markdown("**Data**")
+    cab5.markdown("**Ações**")
+
+    st.divider()
+
+    for expense in expenses:
+
+        col1, col2, col3, col4, col5 = st.columns(
+            [3, 2, 2, 2, 1]
+        )
+
+        with col1:
+            st.write(expense.nome)
+
+        with col2:
+            st.write(expense.categoria)
+
+        with col3:
+            st.write(f"R$ {expense.valor:,.2f}")
+
+        with col4:
+            st.write(
+                expense.data.strftime("%d/%m/%Y")
+            )
+
+        with col5:
+
+            if st.button(
+                "🗑️",
+                key=f"delete_expense_{expense.id}",
+                help="Excluir gasto"
+            ):
+                st.session_state[
+                    "expense_to_delete"
+                ] = expense.id
+
+    # ==================================================
+    # MODAL DE CONFIRMAÇÃO
+    # ==================================================
+
+    if "expense_to_delete" in st.session_state:
+
+        expense_id = st.session_state[
+            "expense_to_delete"
+        ]
+
+        expense = (
+            db.query(Expense)
+            .filter(
+                Expense.id == expense_id
+            )
+            .first()
+        )
+
+        if expense:
+
+            with st.container(border=True):
+
+                st.warning(
+                    f"Tem certeza que deseja excluir "
+                    f"o gasto '{expense.nome}'?"
+                )
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+
+                    if st.button(
+                        "✅ Confirmar Exclusão",
+                        use_container_width=True,
+                    ):
+
+                        expense.is_deleted = True
+                        expense.deleted_at = datetime.utcnow()
+
+                        db.commit()
+
+                        del st.session_state[
+                            "expense_to_delete"
+                        ]
+
+                        st.success(
+                            "Gasto removido com sucesso!"
+                        )
+
+                        st.rerun()
+
+                with col2:
+
+                    if st.button(
+                        "❌ Cancelar",
+                        use_container_width=True,
+                    ):
+
+                        del st.session_state[
+                            "expense_to_delete"
+                        ]
+
+                        st.rerun()
 
 else:
 
     st.info(
-        "Nenhum gasto registrado"
+        "Nenhum gasto registrado."
     )
-
 
 # =====================================================
 # FECHAR DB

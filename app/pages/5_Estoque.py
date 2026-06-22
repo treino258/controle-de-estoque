@@ -6,7 +6,7 @@ import streamlit as st
 
 from app.database.connection import SessionLocal
 from app.models import Product
-from app.services.inventory_service import (
+from app.services import (
     consumir_lote_completo,
     get_abertos_proximos_vencimento,
     get_dashboard_estoque,
@@ -32,6 +32,7 @@ busca = st.text_input("🔍 Buscar produto")
 
 try:
     stock_data = get_dashboard_estoque(db)
+    
 
     if stock_data:
         if busca:
@@ -39,15 +40,15 @@ try:
                 p for p in stock_data if busca.lower() in p["nome"].lower()
             ]
 
-        col = st.columns([4, 2, 1.1, 1.1, 1.1, 1.1, 1.2, 1.4])
+        col = st.columns([3, 2, 1.1, 1.1, 1.1, 1.1, 1.2, 1.4])
         col[0].markdown("**🧾 Produto**")
-        col[1].markdown("**📁 Categoria**")
+        col[1].markdown("**📁 Tipo**")
         col[2].markdown("**📦 Fechado**")
         col[3].markdown("**🧊 Em uso**")
         col[4].markdown("**📦 Total**")
         col[5].markdown("**⚠️ Mín**")
-        col[6].markdown("**Qtd**")
-        col[7].markdown("**Abrir**")
+        col[6].markdown("**Abrir qtde**")
+        
         st.divider()
 
         for item in stock_data:
@@ -56,7 +57,7 @@ try:
             em_uso = item["estoque_aberto"]
             total = item["estoque_total"]
 
-            col = st.columns([4, 2, 1.1, 1.1, 1.1, 1.1, 1.2, 1.4])
+            col = st.columns([3, 2, 1.1, 1.1, 1.1, 1.1, 1.2, 1.4])
 
             col[0].markdown(
                 (
@@ -67,7 +68,7 @@ try:
                 unsafe_allow_html=True,
             )
             col[1].markdown(
-                f"<span style='font-size:20px'>{item['categoria']}</span>",
+                f"<span style='font-size:20px'>{item['tipo']}</span>",
                 unsafe_allow_html=True,
             )
             col[2].markdown(
@@ -104,7 +105,6 @@ try:
                             "Abrir",
                             use_container_width=True,
                         )
-                col[7].write("")
                 if abrir:
                     produto = db.get(Product, produto_id)
                     validade_aberto = None
