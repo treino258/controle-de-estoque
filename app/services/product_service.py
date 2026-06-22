@@ -12,6 +12,7 @@ from app.models import Product
 
 
 
+
 def _get_product(session: Session, product_id: int) -> Product:
     produto = session.get(Product, product_id)
     if not produto:

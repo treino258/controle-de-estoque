@@ -7,6 +7,8 @@ from sqlite3 import IntegrityError
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from app.database.connection import SessionLocal
+
 from app.database.seed import DEFAULT_TENANT_ID
 from app.models import Product
 
@@ -17,7 +19,58 @@ from app.models.recipes import RecipeItem
 
 from app.services import _get_product
 
+from app.repositories import listar_receitas_ativas, listar_ingredientes_disponiveis
 
+# ---------------------------------------------------------------------------
+# repositorios
+# ---------------------------------------------------------------------------
+
+def obter_receitas_ativas():
+
+    db = SessionLocal()
+
+    try:
+        return listar_receitas_ativas(db)
+    
+    finally:
+        db.close()
+
+def obter_ingredientes_ativos():
+    db = SessionLocal()
+
+    try:
+        return listar_ingredientes_disponiveis(db)
+    
+    finally:
+        db.close()
+
+
+def buscar_ingredientes_receita(
+    session: Session,
+    recipe_id: int,
+    tenant_id: int = DEFAULT_TENANT_ID,
+) -> list[RecipeItem]:
+    """
+    Retorna todos os ingredientes de uma receita.
+    """
+
+    return (
+        session.query(RecipeItem)
+        .join(
+            Product,
+            RecipeItem.recipe_id == Product.id,
+        )
+        .filter(
+            RecipeItem.recipe_id == recipe_id,
+            Product.tenant_id == tenant_id,
+        )
+        .all()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Criar receita
+# ---------------------------------------------------------------------------
 def criar_receita_item(
     session: Session,
     recipe_id: int,
@@ -96,27 +149,7 @@ def criar_receita_item(
     return item
 
 
-def buscar_ingredientes_receita(
-    session: Session,
-    recipe_id: int,
-    tenant_id: int = DEFAULT_TENANT_ID,
-) -> list[RecipeItem]:
-    """
-    Retorna todos os ingredientes de uma receita.
-    """
 
-    return (
-        session.query(RecipeItem)
-        .join(
-            Product,
-            RecipeItem.recipe_id == Product.id,
-        )
-        .filter(
-            RecipeItem.recipe_id == recipe_id,
-            Product.tenant_id == tenant_id,
-        )
-        .all()
-    )
 
 # ---------------------------------------------------------------------------
 # desativar / atualizar

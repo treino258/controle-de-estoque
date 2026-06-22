@@ -17,6 +17,9 @@ from app.models.enums import ProductType
 from app.models.mixins import TenantMixin, TimestampMixin
 
 
+
+
+
 class Product(TenantMixin, TimestampMixin, Base):
     __tablename__ = "products"
 

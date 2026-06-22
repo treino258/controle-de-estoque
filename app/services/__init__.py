@@ -35,7 +35,8 @@ from app.services.recipe_service import (
     buscar_ingredientes_receita,
     mudar_preco_receita,
     pode_excluir_receita,
-    adicionar_ingrediente_receita
+    adicionar_ingrediente_receita,
+    obter_receitas_ativas
     )
 
 from app.services.movement_services import (

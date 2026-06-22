@@ -16,6 +16,10 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database.connection import SessionLocal
 from app.models import Product
+
+from app.repositories import (
+    listar_ingredientes_disponiveis
+)
 from app.services import (
     adicionar_ingrediente_receita,
     atualizar_quantidade_receita,
@@ -30,7 +34,7 @@ from app.services import (
     remover_receita_item,
     desativar_receita,
     calcular_custo_receita,
-    get_custo_unitario_receita
+    obter_receitas_ativas
 )
 
 
@@ -137,21 +141,11 @@ if tipo_produto in (
 # =========================================================
 # RECEITAS
 # =========================================================
-session = SessionLocal()
 
-receitas_existentes = (
-    session.query(Product)
-    .filter(
-        Product.tipo_produto == "receita",
-        Product.ativo == True,
-    )
-    .order_by(Product.nome)
-    .all()
-)
+
+receitas_existentes = obter_receitas_ativas()
 
 if tipo_produto == "receita":
-
-    
 
     st.divider()
 
@@ -163,15 +157,7 @@ if tipo_produto == "receita":
     db_temp = SessionLocal()
     
 
-    ingredientes_disponiveis = (
-        db_temp.query(Product)
-        .filter(
-            Product.tipo_produto != "receita",
-            Product.ativo == True,
-        )
-        .order_by(Product.nome)
-        .all()
-    )
+    ingredientes_disponiveis = listar_ingredientes_disponiveis()
 
     db_temp.close()
 
