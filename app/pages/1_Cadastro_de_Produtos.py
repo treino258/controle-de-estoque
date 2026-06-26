@@ -1,9 +1,11 @@
 import streamlit as st
 
-from app.models.enums import ProductType
-from app.models.stock_movement import StockMovement
-from app.services.cost_service import get_custo_unitario_produto
-from app.utils.unit_converter import converter_para_estoque, formatar_receita, quantidade_exibicao, unidade_exibicao
+from app.utils.unit_converter import (
+    converter_para_estoque,
+    formatar_receita,
+    quantidade_exibicao,
+    unidade_exibicao,
+)
 
 st.set_page_config(
     page_title="Controle de Estoque",
@@ -11,41 +13,24 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-from sqlalchemy.exc import IntegrityError
-
-
-from app.database.connection import SessionLocal
-from app.models import Product
-
-from app.repositories import (
-    listar_ingredientes_disponiveis
-)
-from app.services import (
-    adicionar_ingrediente_receita,
-    atualizar_quantidade_receita,
-    criar_produto,
-    criar_receita_item,
-    desativar_produto,
-    delete_product,
-    mudar_preco_receita,
-    pode_excluir,
-    pode_excluir_receita,
-    remover_receita,
-    remover_receita_item,
-    desativar_receita,
-    calcular_custo_receita,
-    obter_receitas_ativas
+from app.services import pode_excluir, pode_excluir_receita
+from app.services.application_service import (
+    adicionar_ingrediente_receita_ui,
+    alternar_produto_ui,
+    alternar_receita_ui,
+    atualizar_quantidade_receita_ui,
+    catalogo_produtos,
+    copiar_ingredientes_receita,
+    custo_receita_ui,
+    custo_unitario_produto_ui,
+    excluir_produto_ui,
+    mudar_preco_receita_ui,
+    remover_receita_item_ui,
+    remover_receita_ui,
+    salvar_produto_com_receita,
 )
 
-
-
-UNIDADES_MEDIDA = [
-    "g",
-    "kg",
-    "ml",
-    "L",
-    "un"
-]
+UNIDADES_MEDIDA = ["g", "kg", "ml", "L", "un"]
 
 TIPOS_LABEL = {
     "materia_prima": "Matéria-Prima",
@@ -53,7 +38,6 @@ TIPOS_LABEL = {
     "produto_final": "Produto Final",
     "receita": "Receita",
 }
-
 
 
 # =========================================================
@@ -68,9 +52,7 @@ st.write(
     "devem ser cadastrados separadamente."
 )
 
-nome = st.text_input(
-    "Nome do produto"
-)
+nome = st.text_input("Nome do produto")
 
 tipo_produto = st.selectbox(
     "Tipo do Produto",
@@ -108,9 +90,7 @@ if tipo_produto in (
     "consumivel",
 ):
 
-    controla_abertura = st.checkbox(
-        "Controla abertura?"
-    )
+    controla_abertura = st.checkbox("Controla abertura?")
 
     if controla_abertura:
 
@@ -143,7 +123,10 @@ if tipo_produto in (
 # =========================================================
 
 
-receitas_existentes = obter_receitas_ativas()
+products_catalog = catalogo_produtos()
+receitas_existentes = [
+    p for p in products_catalog if p.tipo_produto.value == "receita" and p.ativo
+]
 
 if tipo_produto == "receita":
 
@@ -154,18 +137,13 @@ if tipo_produto == "receita":
     if "ingredientes_receita" not in st.session_state:
         st.session_state.ingredientes_receita = []
 
-    db_temp = SessionLocal()
-    
-
-    ingredientes_disponiveis = listar_ingredientes_disponiveis()
-
-    db_temp.close()
+    ingredientes_disponiveis = [
+        p for p in products_catalog if p.tipo_produto.value != "receita" and p.ativo
+    ]
 
     if not ingredientes_disponiveis:
 
-        st.warning(
-            "Cadastre produtos antes de criar receitas."
-        )
+        st.warning("Cadastre produtos antes de criar receitas.")
 
     else:
 
@@ -174,21 +152,20 @@ if tipo_produto == "receita":
         ingrediente_novo = col1.selectbox(
             "Ingrediente",
             ingredientes_disponiveis,
-            format_func=lambda p:
-                f"{p.nome} ({p.unidade_medida})",
+            format_func=lambda p: f"{p.nome} ({p.unidade_medida})",
             key="novo_ingrediente",
         )
 
-        unidade_display = unidade_exibicao(
-        ingrediente_novo.unidade_medida
-        )
+        unidade_display = unidade_exibicao(ingrediente_novo.unidade_medida)
 
-        quantidade_digitada = float(st.number_input(
-            f"Quantidade ({unidade_display})",
-            min_value=0.01,
-            step=0.1,
-            format="%.0f"
-        ))
+        quantidade_digitada = float(
+            st.number_input(
+                f"Quantidade ({unidade_display})",
+                min_value=0.01,
+                step=0.1,
+                format="%.0f",
+            )
+        )
 
         if col3.button(
             "➕ Adicionar",
@@ -196,21 +173,19 @@ if tipo_produto == "receita":
         ):
 
             st.session_state.ingredientes_receita.append(
-            {
-                "ingredient_id": ingrediente_novo.id,
-                "nome": ingrediente_novo.nome,
-                "unidade": ingrediente_novo.unidade_medida,
-
-                # valor digitado pelo usuário
-                "quantidade_exibicao": quantidade_digitada,
-
-                # valor convertido para estoque
-                "quantidade_estoque": converter_para_estoque(
-                    quantidade_digitada,
-                    ingrediente_novo.unidade_medida,
-                ),
-            }
-        )
+                {
+                    "ingredient_id": ingrediente_novo.id,
+                    "nome": ingrediente_novo.nome,
+                    "unidade": ingrediente_novo.unidade_medida,
+                    # valor digitado pelo usuário
+                    "quantidade_exibicao": quantidade_digitada,
+                    # valor convertido para estoque
+                    "quantidade_estoque": converter_para_estoque(
+                        quantidade_digitada,
+                        ingrediente_novo.unidade_medida,
+                    ),
+                }
+            )
 
             st.rerun()
 
@@ -218,9 +193,7 @@ if tipo_produto == "receita":
 
             st.markdown("### Ingredientes adicionados")
 
-            for idx, item in enumerate(
-                st.session_state.ingredientes_receita
-            ):
+            for idx, item in enumerate(st.session_state.ingredientes_receita):
 
                 c1, c2, c3 = st.columns([4, 1, 1])
 
@@ -263,13 +236,12 @@ if tipo_produto == "receita":
                 if c3.button("❌", key=f"remove_{idx}"):
 
                     st.session_state.ingredientes_receita = [
-                        i for j, i in enumerate(st.session_state.ingredientes_receita)
+                        i
+                        for j, i in enumerate(st.session_state.ingredientes_receita)
                         if j != idx
                     ]
 
                     st.rerun()
-
-                
 
         if receitas_existentes:
 
@@ -288,33 +260,14 @@ if tipo_produto == "receita":
                 ):
 
                     st.session_state.ingredientes_receita = []
-                    receita_base = (
-                        session.query(Product)
-                        .filter(Product.id == receita_base.id)
-                        .first()
+                    st.session_state.ingredientes_receita = copiar_ingredientes_receita(
+                        receita_base.id
                     )
 
-                    for item in receita_base.recipe_items:
-
-                        st.session_state.ingredientes_receita.append(
-                            {
-                                "ingredient_id": item.ingredient_id,
-                                "nome": item.ingredient.nome,
-                                "unidade": item.ingredient.unidade_medida,
-                                "quantidade_exibicao": quantidade_exibicao(
-                                    item.quantity,
-                                    item.ingredient.unidade_medida,
-                                ),
-                                "quantidade_estoque": item.quantity,
-                            }
-                        )
-
-                    st.success(
-                        f"Receita '{receita_base.nome}' copiada!"
-                    )
+                    st.success(f"Receita '{receita_base.nome}' copiada!")
 
                     st.rerun()
-                    session.close()
+
 
 # =========================================================
 # BOTÃO SALVAR
@@ -327,9 +280,7 @@ if st.button(
 
     if not nome.strip():
 
-        st.error(
-            "Informe o nome do produto."
-        )
+        st.error("Informe o nome do produto.")
 
         st.stop()
 
@@ -337,18 +288,13 @@ if st.button(
 
         if len(st.session_state.ingredientes_receita) == 0:
 
-            st.error(
-                "Adicione pelo menos um ingrediente."
-            )
+            st.error("Adicione pelo menos um ingrediente.")
 
             st.stop()
 
-    db = SessionLocal()
-
     try:
 
-        produto = criar_produto(
-            session=db,
+        produto_nome = salvar_produto_com_receita(
             nome=nome,
             tipo_produto=tipo_produto,
             unidade_medida=unidade_medida,
@@ -356,93 +302,39 @@ if st.button(
             controla_abertura=controla_abertura,
             preco_venda=preco_venda,
             validade_apos_abertura=validade_apos_abertura,
+            ingredientes=st.session_state.ingredientes_receita,
         )
 
         if tipo_produto == "receita":
-
-            for item in st.session_state.ingredientes_receita:
-
-                criar_receita_item(
-                        session=db,
-                        recipe_id=produto.id,
-                        ingredient_id=item["ingredient_id"],
-                        quantity=item["quantidade_estoque"],
-                    )
-
             st.session_state.ingredientes_receita = []
 
-        st.success(
-            f"{produto.nome} cadastrado com sucesso!"
-        )
+        st.success(f"{produto_nome} cadastrado com sucesso!")
 
         st.rerun()
 
-    except IntegrityError:
-
-        db.rollback()
-
-        st.error(
-            "Já existe um produto com esse nome."
-        )
-
     except Exception as e:
 
-        db.rollback()
+        st.error(f"Erro ao salvar produto: {e}")
 
-        st.error(
-            f"Erro ao salvar produto: {e}"
-        )
-
-    finally:
-
-        db.close()
-
-
-
-db = SessionLocal()
 with st.expander("Produtos cadastrados"):
-    products = db.query(Product).order_by(Product.nome).all()
-    produtos = [
-        p
-        for p in products
-        if p.tipo_produto.value != "receita"
-    ]
+    products = catalogo_produtos()
+    produtos = [p for p in products if p.tipo_produto.value != "receita"]
 
-    receitas = [
-        p
-        for p in products
-        if p.tipo_produto.value == "receita"
-    ]
+    receitas = [p for p in products if p.tipo_produto.value == "receita"]
 
-    ativos = [
-        p
-        for p in products
-        if p.ativo
-        and p.tipo_produto.value != "receita"
-    ]
+    ativos = [p for p in products if p.ativo and p.tipo_produto.value != "receita"]
 
     inativos = [
-        p
-        for p in products
-        if not p.ativo
-        and p.tipo_produto.value != "receita"
+        p for p in products if not p.ativo and p.tipo_produto.value != "receita"
     ]
 
     receitas_ativas = [
-        p
-        for p in products
-        if p.ativo
-        and p.tipo_produto.value == "receita"
+        p for p in products if p.ativo and p.tipo_produto.value == "receita"
     ]
 
     receitas_inativas = [
-        p
-        for p in products
-        if not p.ativo
-        and p.tipo_produto.value == "receita"
+        p for p in products if not p.ativo and p.tipo_produto.value == "receita"
     ]
-
-
 
     if products:
 
@@ -459,37 +351,28 @@ with st.expander("Produtos cadastrados"):
 
         for product in ativos:
 
-            col1, col2, col3, col4, col5, col6 = st.columns(
-                [2, 1, 1, 1, 0.4, 1]
-            )
+            col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 0.4, 1])
 
             col1.write(product.nome)
-            col2.write(
-                TIPOS_LABEL[
-                    product.tipo_produto.value
-                ]
-            )
+            col2.write(TIPOS_LABEL[product.tipo_produto.value])
             col3.write(product.unidade_medida)
             col4.write(product.estoque_minimo)
 
             if pode_excluir(product):
 
                 if col5.button(
-                    
-                                "🗑️",
-                                key=f"delete_inactive_{product.id}",
-                            ):
-                                try:
-                                    delete_product(db, product.id)
+                    "🗑️",
+                    key=f"delete_inactive_{product.id}",
+                ):
+                    try:
+                        excluir_produto_ui(product.id)
 
-                                    st.success(
-                                        f"{product.nome} excluído com sucesso!"
-                                    )
+                        st.success(f"{product.nome} excluído com sucesso!")
 
-                                    st.rerun()
+                        st.rerun()
 
-                                except ValueError as e:
-                                    st.error(str(e))
+                    except ValueError as e:
+                        st.error(str(e))
 
             else:
                 col5.button(
@@ -502,11 +385,9 @@ with st.expander("Produtos cadastrados"):
                 key=f"toggle_{product.id}",
             ):
 
-
                 estava_ativo = product.ativo
 
-                desativar_produto(db, product.id)
-
+                alternar_produto_ui(product.id)
 
                 st.success(
                     f"{product.nome} "
@@ -514,19 +395,17 @@ with st.expander("Produtos cadastrados"):
                 )
 
                 st.rerun()
-            
+
         if inativos:
 
             with st.expander(
                 f"Produtos desativados ({len(inativos)})",
                 expanded=False,
-                ):
+            ):
 
                 for product in inativos:
 
-                    col1, col2, col3, col4, col5, col6 = st.columns(
-                        [3, 2, 2, 2, 1, 1]
-                    )
+                    col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 2, 2, 1, 1])
 
                     col1.markdown(
                         f"""
@@ -534,7 +413,7 @@ with st.expander("Produtos cadastrados"):
                             {product.nome}
                         </span>
                         """,
-                        unsafe_allow_html=True
+                        unsafe_allow_html=True,
                     )
 
                     col2.markdown(
@@ -543,7 +422,7 @@ with st.expander("Produtos cadastrados"):
                             {TIPOS_LABEL[product.tipo_produto.value]}
                         </span>
                         """,
-                        unsafe_allow_html=True
+                        unsafe_allow_html=True,
                     )
 
                     col3.markdown(
@@ -552,7 +431,7 @@ with st.expander("Produtos cadastrados"):
                             {product.unidade_medida}
                         </span>
                         """,
-                        unsafe_allow_html=True
+                        unsafe_allow_html=True,
                     )
 
                     col4.markdown(
@@ -561,34 +440,28 @@ with st.expander("Produtos cadastrados"):
                             {product.estoque_minimo}
                         </span>
                         """,
-                        unsafe_allow_html=True
+                        unsafe_allow_html=True,
                     )
 
                     # EXCLUIR
                     if pode_excluir(product):
 
-                            if col5.button(
-                                "🗑️",
-                                key=f"delete_inactive_{product.id}",
-                            ):
-                                try:
-                                    delete_product(db, product.id)
+                        if col5.button(
+                            "🗑️",
+                            key=f"delete_inactive_{product.id}",
+                        ):
+                            try:
+                                excluir_produto_ui(product.id)
 
-                                    st.success(
-                                        f"{product.nome} excluído com sucesso!"
-                                    )
+                                st.success(f"{product.nome} excluído com sucesso!")
 
-                                    st.rerun()
+                                st.rerun()
 
-                                except ValueError as e:
-                                    st.error(str(e))
+                            except ValueError as e:
+                                st.error(str(e))
 
                     else:
-                        col5.button(
-                        "🔒",
-                        disabled=True,
-                        key=f"locked_{product.id}"
-                        )
+                        col5.button("🔒", disabled=True, key=f"locked_{product.id}")
 
                     # ATIVAR
                     if col6.button(
@@ -596,20 +469,15 @@ with st.expander("Produtos cadastrados"):
                         key=f"activate_{product.id}",
                     ):
 
-                        desativar_produto(db, product.id)
+                        alternar_produto_ui(product.id)
 
-                        st.success(
-                            f"{product.nome} ativado com sucesso!"
-                        )
+                        st.success(f"{product.nome} ativado com sucesso!")
 
                         st.rerun()
 
     else:
 
         st.info("Nenhum produto cadastrado ainda.")
-
-
-
 
 
 st.divider()
@@ -620,11 +488,8 @@ for receita in receitas_ativas:
     ingredientes_disponiveis = [
         p
         for p in ativos
-        if p.tipo_produto != ProductType.RECEITA
-        and p.id not in [
-            item.ingredient_id
-            for item in receita.recipe_items
-        ]
+        if p.tipo_produto.value != "receita"
+        and p.id not in [item.ingredient_id for item in receita.recipe_items]
     ]
 
     with st.expander(f"☕ {receita.nome} ({len(receita.recipe_items)} ingredientes)"):
@@ -632,68 +497,43 @@ for receita in receitas_ativas:
         col_preço, col_mudar_preço = st.columns([1, 0.2])
         col_preço.header(f"Preço venda: R$ {receita.preco_venda:.2f}")
 
-
-        custos = calcular_custo_receita(
-            db,
-            receita,
-        )
+        custos = custo_receita_ui(receita)
 
         if custos["sem_custo"]:
 
             st.warning(
-                "Ingredientes sem compra registrada: "
-                + ", ".join(custos["sem_custo"])
+                "Ingredientes sem compra registrada: " + ", ".join(custos["sem_custo"])
             )
 
         else:
 
-            lucro = (
-                float(receita.preco_venda)
-                - custos["custo_total"]
-            )
+            lucro = float(receita.preco_venda) - custos["custo_total"]
 
-            margem = (
-                lucro
-                / float(receita.preco_venda)
-            ) * 100
+            margem = (lucro / float(receita.preco_venda)) * 100
 
             c1, c2 = st.columns(2)
 
-            c1.metric(
-                "Custo",
-                f"R$ {custos['custo_total']:.2f}"
-            )
+            c1.metric("Custo", f"R$ {custos['custo_total']:.2f}")
 
-
-            c2.metric(
-                "Margem Bruta",
-                f"{margem:.1f}%"
-    )
-
-        
+            c2.metric("Margem Bruta", f"{margem:.1f}%")
 
         with col_mudar_preço.popover("💰 Alterar preço", use_container_width=True):
-                
-                
-                novo_preço = st.number_input(
-                    f"Preço de venda: R$ ({receita.preco_venda:.2f})",
-                    min_value=0.01,
-                    step=0.1,
-                    format="%.2f",
-                    value=float(receita.preco_venda),  # Valor atual como padrão
-                    key=f"receita_preco_{receita.id}"       # Chave única por ingrediente
-                )
-                if st.button("✔️ Salvar", key=f"save_price_{receita.id}", type="secondary"):
-                    try:
-                        mudar_preco_receita(db, receita.id, novo_preço)
-                        db.commit()
-                        st.success("Preço atualizado!")
-                        st.rerun()
-                    except Exception as e:
-                        db.rollback()
-                        st.error(f"Erro ao atualizar preço: {e}")
 
-
+            novo_preço = st.number_input(
+                f"Preço de venda: R$ ({receita.preco_venda:.2f})",
+                min_value=0.01,
+                step=0.1,
+                format="%.2f",
+                value=float(receita.preco_venda),  # Valor atual como padrão
+                key=f"receita_preco_{receita.id}",  # Chave única por ingrediente
+            )
+            if st.button("✔️ Salvar", key=f"save_price_{receita.id}", type="secondary"):
+                try:
+                    mudar_preco_receita_ui(receita.id, novo_preço)
+                    st.success("Preço atualizado!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao atualizar preço: {e}")
 
         st.markdown("### Ingredientes")
 
@@ -703,9 +543,7 @@ for receita in receitas_ativas:
 
             if not ingredientes_disponiveis:
 
-                st.info(
-                    "Todos os ingredientes disponíveis já foram adicionados."
-                )
+                st.info("Todos os ingredientes disponíveis já foram adicionados.")
 
             else:
 
@@ -716,9 +554,7 @@ for receita in receitas_ativas:
                     key=f"new_ingredient_{receita.id}",
                 )
 
-                unidade_disp = unidade_exibicao(
-                    ingrediente.unidade_medida
-                )
+                unidade_disp = unidade_exibicao(ingrediente.unidade_medida)
 
                 quantidade = st.number_input(
                     f"Quantidade ({unidade_disp})",
@@ -739,16 +575,13 @@ for receita in receitas_ativas:
 
                     try:
 
-                        adicionar_ingrediente_receita(
-                            db,
+                        adicionar_ingrediente_receita_ui(
                             receita.id,
                             ingrediente.id,
                             qtd_convertida,
                         )
 
-                        st.success(
-                            "Ingrediente adicionado!"
-                        )
+                        st.success("Ingrediente adicionado!")
 
                         st.rerun()
 
@@ -763,74 +596,62 @@ for receita in receitas_ativas:
                 item.ingredient.unidade_medida,
             )
 
-            custo_unitario = get_custo_unitario_produto(
-                db,
-                item.ingredient_id,
-            )
+            custo_unitario = custo_unitario_produto_ui(item.ingredient_id)
             if custo_unitario is not None:
                 custo_item = custo_unitario * item.quantity
                 custo_total += custo_item
             else:
                 custo_item = None
-            
-                        
+
             # Criando colunas para alinhar o texto e as ações por ingrediente
-            col_texto, col_valor, col_edit= st.columns([2, 2, 1])
+            col_texto, col_valor, col_edit = st.columns([2, 2, 1])
 
             col_texto.write(f"• {item.ingredient.nome} - {quantidade_formatada}")
 
-        
             if custo_item is not None:
-                col_valor.write(
-                    f"R$ {custo_item:.2f}"
-                )
+                col_valor.write(f"R$ {custo_item:.2f}")
             else:
                 col_valor.caption("Sem custo")
 
             # 1) CORREÇÃO DO EDITAR: Usando Popover para coletar o novo dado
             with col_edit.popover("✏️ Editar", use_container_width=True):
                 unidade_disp = unidade_exibicao(item.ingredient.unidade_medida)
-                
+
                 nova_quantidade = st.number_input(
                     f"Nova quantidade ({unidade_disp})",
                     min_value=0.01,
                     step=0.1,
                     format="%.2f",
                     value=float(item.quantity),  # Valor atual como padrão
-                    key=f"input_{item.id}"       # Chave única por ingrediente
+                    key=f"input_{item.id}",  # Chave única por ingrediente
                 )
 
-
                 col1, col2 = st.columns([1, 1])
-                if col1.button("🗑️ Excluir", key=f"delete_item_{item.id}", type="primary"):
-                    remover_receita_item(db, item.id)
+                if col1.button(
+                    "🗑️ Excluir", key=f"delete_item_{item.id}", type="primary"
+                ):
+                    remover_receita_item_ui(item.id)
                     st.success("Ingrediente removido com sucesso!")
                     st.rerun()
-                
+
                 if col2.button("✔️ Salvar", key=f"save_{item.id}", type="secondary"):
                     # Se sua função espera o valor convertido para estoque:
                     qtd_convertida = converter_para_estoque(
-                        nova_quantidade, 
-                        item.ingredient.unidade_medida
+                        nova_quantidade, item.ingredient.unidade_medida
                     )
-                    
-                    atualizar_quantidade_receita(db, item.id, qtd_convertida)
+
+                    atualizar_quantidade_receita_ui(item.id, qtd_convertida)
                     st.success("Atualizado!")
                     st.rerun()
 
-            
-
-            
-
         col_esquerda_Vazia, col_desativar, col_remover = st.columns([4, 1, 1])
-        
+
         if pode_excluir_receita(receita):
 
             if col_remover.button(
-                "🗑️ Excluir receita",
-                key=f"delete_recipe_{receita.id}"
+                "🗑️ Excluir receita", key=f"delete_recipe_{receita.id}"
             ):
-                remover_receita(db, receita.id)
+                remover_receita_ui(receita.id)
                 st.success("Receita excluída com sucesso!")
                 st.rerun()
 
@@ -842,11 +663,9 @@ for receita in receitas_ativas:
             key=f"toggle_{receita.id}",
         ):
 
-
             estava_ativo = receita.ativo
 
-            desativar_receita(db, receita.id)
-
+            alternar_receita_ui(receita.id)
 
             st.success(
                 f"{receita.nome} "
@@ -854,7 +673,7 @@ for receita in receitas_ativas:
             )
 
             st.rerun()
-    
+
 if receitas_inativas:
 
     with st.expander(
@@ -863,7 +682,6 @@ if receitas_inativas:
     ):
 
         for receita in receitas_inativas:
-            
 
             col1, col2 = st.columns([1, 1])
 
@@ -884,12 +702,8 @@ if receitas_inativas:
                     key=f"activate_recipe_{receita.id}",
                     use_container_width=True,
                 ):
-                    desativar_receita(db, receita.id)
+                    alternar_receita_ui(receita.id)
 
-                    st.success(
-                        f"{receita.nome} ativada com sucesso!"
-                    )
-                    
+                    st.success(f"{receita.nome} ativada com sucesso!")
+
                     st.rerun()
-        
-

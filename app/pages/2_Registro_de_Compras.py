@@ -11,18 +11,12 @@ from app.utils.ui_formater import (
     format_data_compra_badge,
 )
 from app.utils.data_formater import format_validade
-from app.database.connection import SessionLocal
-from app.models import Product, StockMovement
-from app.services import (
-    registrar_entrada, 
-    registrar_ajuste, 
-    get_valor_estoque_total, 
-    get_historico_produto, 
-    get_dashboard_estoque,
-    )
-
-
-db = SessionLocal()
+from app.services.application_service import (
+    dashboard_estoque,
+    historico_produto,
+    registrar_ajuste_ui,
+    registrar_compra_ui,
+)
 
 previous_prices = {}
 
@@ -36,29 +30,22 @@ st.set_page_config(
 st.header("2) Registro de Compras")
 st.write("O preço total é calculado automaticamente: quantidade * preço unitário.")
 
-db = SessionLocal()
-
-
-products = get_dashboard_estoque(db)
-
-
+products = dashboard_estoque()
 
 
 if not products:
     st.warning("Cadastre pelo menos um produto antes de registrar compras.")
-    db.close()
     st.stop()
 
-product_options = {
-    f'{p["nome"]} ({p["unidade_medida"]})': p["id"]
-    for p in products
-}
+product_options = {f'{p["nome"]} ({p["unidade_medida"]})': p["id"] for p in products}
 
 with st.form("form_compra"):
     product_label = st.selectbox("Produto", list(product_options.keys()))
     quantidade = st.number_input("Quantidade", min_value=0.01, step=1.0)
     preco_unitario = st.number_input("Preço unitário (R$)", min_value=0.01, step=0.5)
-    data_compra = st.date_input("Data da compra", value=date.today(), format="DD/MM/YYYY")
+    data_compra = st.date_input(
+        "Data da compra", value=date.today(), format="DD/MM/YYYY"
+    )
     data_validade = st.date_input("Data de validade", value=None, format="DD/MM/YYYY")
     fornecedor = st.text_input("Fornecedor")
     tempo_entrega = st.number_input("Tempo de entrega (dias)", min_value=0, step=1)
@@ -66,19 +53,21 @@ with st.form("form_compra"):
     submitted = st.form_submit_button("Registrar compra")
 
 if submitted:
-    mov = registrar_entrada(db, product_options[product_label], quantidade, preco_unitario, data_compra, data_validade, fornecedor, tempo_entrega)
+    mov = registrar_compra_ui(
+        product_options[product_label],
+        quantidade,
+        preco_unitario,
+        data_compra,
+        data_validade,
+        fornecedor,
+        tempo_entrega,
+    )
     st.success(f"Entrada registrada! Preço total: R$ {mov.preco_total:.2f}")
 
 
-
 with st.expander("Últimas entradas"):
-    
 
-
-
-    h1, h2, h3, h4, h5, h6, h7 = st.columns(
-        [2, 2, 1.5, 1.5, 1.5, 1.2, 0.8]
-    )
+    h1, h2, h3, h4, h5, h6, h7 = st.columns([2, 2, 1.5, 1.5, 1.5, 1.2, 0.8])
 
     h1.markdown("**Produto**")
     h2.markdown("**Qtd**")
@@ -90,20 +79,11 @@ with st.expander("Últimas entradas"):
 
     st.divider()
 
-
-
     for p in products:
 
-        historico = get_historico_produto(
-            db,
-            p["id"],
-            limit=10
-        )
+        historico = historico_produto(p["id"], limit=10)
 
-        entradas = [
-            m for m in historico
-            if m["tipo"] == "entrada"
-        ]
+        entradas = [m for m in historico if m["tipo"] == "entrada"]
 
         ajustes_origem = {
             m["movimento_referencia_id"]
@@ -111,14 +91,10 @@ with st.expander("Últimas entradas"):
             if m["movimento_referencia_id"]
         }
 
-        
-        
-
-        
         for e in entradas:
 
             corrigido = e["id"] in ajustes_origem
-            
+
             if corrigido:
                 continue
             status = "⚠️ Corrigido" if corrigido else "✅ OK"
@@ -129,23 +105,17 @@ with st.expander("Últimas entradas"):
 
             valor_total = valor_unitario * quantidade
 
-        
-
-            c1, c2, c3, c4, c5, c6, c7 = st.columns(
-                [2, 2, 1.5, 1.5, 1.5, 1.2, 0.8]
-            )
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([2, 2, 1.5, 1.5, 1.5, 1.2, 0.8])
 
             c1.write(p["nome"])
 
-            c2.write( f"{quantidade:.0f} {p['unidade_medida']}")
+            c2.write(f"{quantidade:.0f} {p['unidade_medida']}")
 
             c3.write(f"R$ {valor_unitario:.2f}")
 
             c4.write(f"R$ {valor_total:.2f}")
 
-            c5.write(
-                e["data"].strftime("%d/%m/%Y")
-            )
+            c5.write(e["data"].strftime("%d/%m/%Y"))
 
             c6.write(status)
 
@@ -155,13 +125,11 @@ with st.expander("Últimas entradas"):
                 disabled=corrigido,
             ):
 
-                registrar_ajuste(
-                    session=db,
+                registrar_ajuste_ui(
                     product_id=p["id"],
                     quantidade=abs(e["quantidade"]),
                     direcao="saida",
                     motivo="Correção de entrada registrada incorretamente",
-                    data_ajuste=date.today(),
                     observacao=f"Correção da movimentação {e['id']}",
                     movimento_referencia_id=e["id"],
                 )
@@ -171,5 +139,3 @@ with st.expander("Últimas entradas"):
                 st.rerun()
 
             st.divider()
-
-db.close()

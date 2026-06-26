@@ -2,12 +2,10 @@ from datetime import date
 
 import streamlit as st
 
-from app.database.connection import SessionLocal
-
-from app.services import (
-    get_produtos_abaixo_minimo,
-    get_abertos_proximos_vencimento,
-    get_historico_produto,
+from app.services.application_service import (
+    abertos_proximos_vencimento,
+    correcoes_recentes,
+    produtos_abaixo_minimo,
 )
 
 st.set_page_config(
@@ -17,11 +15,8 @@ st.set_page_config(
 
 st.title("🚨 Alertas Operacionais")
 
-st.caption(
-    "Produtos que precisam de atenção imediata."
-)
+st.caption("Produtos que precisam de atenção imediata.")
 
-db = SessionLocal()
 
 # =========================================================
 # ESTOQUE BAIXO
@@ -29,7 +24,7 @@ db = SessionLocal()
 
 st.subheader("📉 Produtos abaixo do estoque mínimo")
 
-baixo_minimo = get_produtos_abaixo_minimo(db)
+baixo_minimo = produtos_abaixo_minimo()
 
 if baixo_minimo:
 
@@ -44,9 +39,7 @@ if baixo_minimo:
 
 else:
 
-    st.success(
-        "✅ Nenhum produto abaixo do estoque mínimo."
-    )
+    st.success("✅ Nenhum produto abaixo do estoque mínimo.")
 
 # =========================================================
 # PRODUTOS ABERTOS PRÓXIMOS DO VENCIMENTO
@@ -54,10 +47,7 @@ else:
 
 st.subheader("⏳ Produtos abertos próximos do vencimento")
 
-proximos = get_abertos_proximos_vencimento(
-    db,
-    dias=3,
-)
+proximos = abertos_proximos_vencimento(dias=3)
 
 if proximos:
 
@@ -81,9 +71,7 @@ if proximos:
 
 else:
 
-    st.success(
-        "✅ Nenhum produto aberto próximo do vencimento."
-    )
+    st.success("✅ Nenhum produto aberto próximo do vencimento.")
 
 # =========================================================
 # MOVIMENTAÇÕES CORRIGIDAS
@@ -91,53 +79,21 @@ else:
 
 st.subheader("↩️ Correções recentes")
 
-produtos = [
-    p for p in get_produtos_abaixo_minimo(db)
-]
-
-movimentos_corrigidos = []
-
-# busca simplificada
-# MVP aceitável
-
-from app.models import StockMovement
-
-ajustes = (
-    db.query(StockMovement)
-    .filter(
-        StockMovement.tipo == "ajuste"
-    )
-    .filter(
-        StockMovement.movimento_referencia_id.isnot(None)
-    )
-    .order_by(
-        StockMovement.data_movimento.desc()
-    )
-    .limit(10)
-    .all()
-)
+ajustes = correcoes_recentes(limit=10)
 
 if ajustes:
 
     for a in ajustes:
 
-        direcao = (
-            "➕" if a.direcao == "entrada"
-            else "➖"
-        )
+        direcao = "➕" if a["direcao"] == "entrada" else "➖"
 
         st.info(
-            f"{direcao} "
-            f"{a.product.nome} | "
-            f"{a.quantidade} | "
-            f"{a.motivo}"
+            f"{direcao} " f"{a['produto']} | " f"{a['quantidade']} | " f"{a['motivo']}"
         )
 
 else:
 
-    st.success(
-        "✅ Nenhuma correção recente."
-    )
+    st.success("✅ Nenhuma correção recente.")
 
 # =========================================================
 # RESUMO RÁPIDO
@@ -165,5 +121,3 @@ with col2:
         "Produtos próximos do vencimento",
         qtd_vencendo,
     )
-
-db.close()
