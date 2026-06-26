@@ -1,23 +1,15 @@
-from datetime import date, datetime
+from datetime import date
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app.database.connection import SessionLocal
-
-from app.database.seed import DEFAULT_TENANT_ID
-from app.models import Expense, Sale
-
-
-from app.services.inventory_service import (
-    get_total_receita,
-    get_total_investido,
-    get_total_gastos,
-    get_total_vendas,
-    get_lucro_estimado,
+from app.services.application_service import (
+    criar_gasto,
+    dados_dashboard_financeiro,
+    excluir_gasto,
+    obter_gasto,
 )
-
 
 # =====================================================
 # CONFIG
@@ -32,25 +24,16 @@ st.title("☕ Dashboard Financeiro")
 
 
 # =====================================================
-# DB
+# DADOS DA TELA
 # =====================================================
 
-db = SessionLocal()
+dashboard_data = dados_dashboard_financeiro()
 
-
-# =====================================================
-# MÉTRICAS
-# =====================================================
-
-receita = get_total_receita(db)
-
-investimento = get_total_investido(db)
-
-gastos = get_total_gastos(db)
-
-lucro = get_lucro_estimado(db)
-
-vendas = get_total_vendas(db)
+receita = dashboard_data["receita"]
+investimento = dashboard_data["investimento"]
+gastos = dashboard_data["gastos"]
+lucro = dashboard_data["lucro"]
+vendas = dashboard_data["vendas"]
 
 
 # =====================================================
@@ -59,25 +42,13 @@ vendas = get_total_vendas(db)
 
 m1, m2, m3, m4 = st.columns(4)
 
-m1.metric(
-    "💰 Receita Total",
-    f"R$ {receita:,.2f}"
-)
+m1.metric("💰 Receita Total", f"R$ {receita:,.2f}")
 
-m2.metric(
-    "📦 Investimento Estoque",
-    f"R$ {investimento:,.2f}"
-)
+m2.metric("📦 Investimento Estoque", f"R$ {investimento:,.2f}")
 
-m3.metric(
-    "🧾 Gastos Gerais",
-    f"R$ {gastos:,.2f}"
-)
+m3.metric("🧾 Gastos Gerais", f"R$ {gastos:,.2f}")
 
-m4.metric(
-    "📈 Lucro Estimado",
-    f"R$ {lucro:,.2f}"
-)
+m4.metric("📈 Lucro Estimado", f"R$ {lucro:,.2f}")
 
 st.divider()
 
@@ -93,24 +64,11 @@ c1, c2 = st.columns(2)
 # EVOLUÇÃO DE VENDAS
 # =====================================================
 
-sales = db.query(Sale).all()
-
-sales_df = pd.DataFrame([
-    {
-        "Data": s.data_venda,
-        "Valor": s.valor_total,
-    }
-    for s in sales
-])
+sales_df = pd.DataFrame(dashboard_data["sales"])
 
 if not sales_df.empty:
 
-    sales_grouped = (
-        sales_df
-        .groupby("Data")["Valor"]
-        .sum()
-        .reset_index()
-    )
+    sales_grouped = sales_df.groupby("Data")["Valor"].sum().reset_index()
 
     fig_sales = px.line(
         sales_grouped,
@@ -120,10 +78,7 @@ if not sales_df.empty:
         markers=True,
     )
 
-    c1.plotly_chart(
-        fig_sales,
-        use_container_width=True
-    )
+    c1.plotly_chart(fig_sales, use_container_width=True)
 
 else:
 
@@ -134,24 +89,11 @@ else:
 # GASTOS
 # =====================================================
 
-expenses = db.query(Expense).all()
-
-expense_df = pd.DataFrame([
-    {
-        "Categoria": e.categoria,
-        "Valor": e.valor,
-    }
-    for e in expenses
-])
+expense_df = pd.DataFrame(dashboard_data["expenses_chart"])
 
 if not expense_df.empty:
 
-    expense_grouped = (
-        expense_df
-        .groupby("Categoria")["Valor"]
-        .sum()
-        .reset_index()
-    )
+    expense_grouped = expense_df.groupby("Categoria")["Valor"].sum().reset_index()
 
     fig_expenses = px.pie(
         expense_grouped,
@@ -160,10 +102,7 @@ if not expense_df.empty:
         title="💸 Distribuição de Gastos",
     )
 
-    c2.plotly_chart(
-        fig_expenses,
-        use_container_width=True
-    )
+    c2.plotly_chart(fig_expenses, use_container_width=True)
 
 else:
 
@@ -183,38 +122,26 @@ st.subheader("📊 Performance do Café")
 p1, p2, p3 = st.columns(3)
 
 
-p1.metric(
-    "🛒 Total de Vendas",
-    vendas
-)
+p1.metric("🛒 Total de Vendas", vendas)
 
 
 if lucro > 0:
 
-    p2.success(
-        "O negócio está operando com lucro"
-    )
+    p2.success("O negócio está operando com lucro")
 
 else:
 
-    p2.error(
-        "O negócio está operando no prejuízo"
-    )
+    p2.error("O negócio está operando no prejuízo")
 
 
 margem = 0
 
 if receita > 0:
 
-    margem = (
-        lucro / receita
-    ) * 100
+    margem = (lucro / receita) * 100
 
 
-p3.metric(
-    "📌 Margem de Lucro",
-    f"{margem:.1f}%"
-)
+p3.metric("📌 Margem de Lucro", f"{margem:.1f}%")
 
 
 st.divider()
@@ -229,16 +156,14 @@ st.subheader("➕ Adicionar Gasto")
 
 with st.form("expense_form"):
 
-    nome = st.text_input(
-        "Nome do gasto"
-    )
+    nome = st.text_input("Nome do gasto")
 
     categoria = st.selectbox(
         "Categoria",
         [
             "fixo",
             "variavel",
-        ]
+        ],
     )
 
     valor = st.number_input(
@@ -247,32 +172,15 @@ with st.form("expense_form"):
         step=0.01,
     )
 
-    data_gasto = st.date_input(
-        "Data",
-        value=date.today()
-    )
+    data_gasto = st.date_input("Data", value=date.today())
 
-    submitted = st.form_submit_button(
-        "Salvar gasto"
-    )
+    submitted = st.form_submit_button("Salvar gasto")
 
     if submitted:
 
-        expense = Expense(
-            tenant_id=DEFAULT_TENANT_ID,
-            nome=nome,
-            categoria=categoria,
-            valor=valor,
-            data=data_gasto,
-        )
+        criar_gasto(nome, categoria, valor, data_gasto)
 
-        db.add(expense)
-
-        db.commit()
-
-        st.success(
-            "Gasto cadastrado!"
-        )
+        st.success("Gasto cadastrado!")
 
         st.rerun()
 
@@ -283,20 +191,13 @@ st.divider()
 # =====================================================
 # TABELA GASTOS
 # =====================================================
-expenses = (
-    db.query(Expense)
-    .filter(Expense.is_deleted == False)
-    .order_by(Expense.data.desc())
-    .all()
-)
+expenses = dashboard_data["expenses"]
 
 st.subheader("📋 Gastos Registrados")
 
 if expenses:
 
-    cab1, cab2, cab3, cab4, cab5 = st.columns(
-        [3, 2, 2, 2, 1]
-    )
+    cab1, cab2, cab3, cab4, cab5 = st.columns([3, 2, 2, 2, 1])
 
     cab1.markdown("**Nome**")
     cab2.markdown("**Categoria**")
@@ -308,34 +209,26 @@ if expenses:
 
     for expense in expenses:
 
-        col1, col2, col3, col4, col5 = st.columns(
-            [3, 2, 2, 2, 1]
-        )
+        col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 2, 1])
 
         with col1:
-            st.write(expense.nome)
+            st.write(expense["nome"])
 
         with col2:
-            st.write(expense.categoria)
+            st.write(expense["categoria"])
 
         with col3:
-            st.write(f"R$ {expense.valor:,.2f}")
+            st.write(f"R$ {expense["valor"]:,.2f}")
 
         with col4:
-            st.write(
-                expense.data.strftime("%d/%m/%Y")
-            )
+            st.write(expense["data"].strftime("%d/%m/%Y"))
 
         with col5:
 
             if st.button(
-                "🗑️",
-                key=f"delete_expense_{expense.id}",
-                help="Excluir gasto"
+                "🗑️", key=f"delete_expense_{expense["id"]}", help="Excluir gasto"
             ):
-                st.session_state[
-                    "expense_to_delete"
-                ] = expense.id
+                st.session_state["expense_to_delete"] = expense["id"]
 
     # ==================================================
     # MODAL DE CONFIRMAÇÃO
@@ -343,25 +236,16 @@ if expenses:
 
     if "expense_to_delete" in st.session_state:
 
-        expense_id = st.session_state[
-            "expense_to_delete"
-        ]
+        expense_id = st.session_state["expense_to_delete"]
 
-        expense = (
-            db.query(Expense)
-            .filter(
-                Expense.id == expense_id
-            )
-            .first()
-        )
+        expense = obter_gasto(expense_id)
 
         if expense:
 
             with st.container(border=True):
 
                 st.warning(
-                    f"Tem certeza que deseja excluir "
-                    f"o gasto '{expense.nome}'?"
+                    f"Tem certeza que deseja excluir " f"o gasto '{expense["nome"]}'?"
                 )
 
                 col1, col2 = st.columns(2)
@@ -373,18 +257,11 @@ if expenses:
                         use_container_width=True,
                     ):
 
-                        expense.is_deleted = True
-                        expense.deleted_at = datetime.utcnow()
+                        excluir_gasto(expense_id)
 
-                        db.commit()
+                        del st.session_state["expense_to_delete"]
 
-                        del st.session_state[
-                            "expense_to_delete"
-                        ]
-
-                        st.success(
-                            "Gasto removido com sucesso!"
-                        )
+                        st.success("Gasto removido com sucesso!")
 
                         st.rerun()
 
@@ -395,20 +272,10 @@ if expenses:
                         use_container_width=True,
                     ):
 
-                        del st.session_state[
-                            "expense_to_delete"
-                        ]
+                        del st.session_state["expense_to_delete"]
 
                         st.rerun()
 
 else:
 
-    st.info(
-        "Nenhum gasto registrado."
-    )
-
-# =====================================================
-# FECHAR DB
-# =====================================================
-
-db.close()
+    st.info("Nenhum gasto registrado.")

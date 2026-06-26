@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 import streamlit as st
 
-from app.database.connection import SessionLocal
-from app.models import Product
-from app.services import (
-    consumir_lote_completo,
-    get_abertos_proximos_vencimento,
-    get_dashboard_estoque,
-    get_lotes_abertos_detalhados,
-    registrar_abertura,
-    registrar_ajuste,
-    registrar_consumo,
-    registrar_perda,
+from app.services.application_service import (
+    abertos_proximos_vencimento,
+    abrir_produto,
+    dashboard_estoque,
+    esgotar_lote,
+    lotes_abertos_detalhados,
+    produtos_ativos_opcoes,
+    registrar_ajuste_ui,
+    registrar_consumo_ui,
+    registrar_perda_ui,
 )
 
 st.set_page_config(
@@ -25,20 +24,16 @@ st.set_page_config(
 
 st.title("📦 Controle de Estoque")
 
-db = SessionLocal()
 
 st.subheader("📊 Estoque atual")
 busca = st.text_input("🔍 Buscar produto")
 
 try:
-    stock_data = get_dashboard_estoque(db)
-    
+    stock_data = dashboard_estoque()
 
     if stock_data:
         if busca:
-            stock_data = [
-                p for p in stock_data if busca.lower() in p["nome"].lower()
-            ]
+            stock_data = [p for p in stock_data if busca.lower() in p["nome"].lower()]
 
         col = st.columns([3, 2, 1.1, 1.1, 1.1, 1.1, 1.2, 1.4])
         col[0].markdown("**🧾 Produto**")
@@ -48,7 +43,7 @@ try:
         col[4].markdown("**📦 Total**")
         col[5].markdown("**⚠️ Mín**")
         col[6].markdown("**Abrir qtde**")
-        
+
         st.divider()
 
         for item in stock_data:
@@ -106,21 +101,8 @@ try:
                             use_container_width=True,
                         )
                 if abrir:
-                    produto = db.get(Product, produto_id)
-                    validade_aberto = None
-                    if produto and produto.validade_apos_abertura:
-                        validade_aberto = date.today() + timedelta(
-                            days=int(produto.validade_apos_abertura)
-                        )
                     try:
-                        registrar_abertura(
-                            db,
-                            product_id=produto_id,
-                            quantidade=float(qtd),
-                            data_abertura=date.today(),
-                            validade_aberto=validade_aberto,
-                        )
-                        db.expire_all()
+                        abrir_produto(produto_id, float(qtd))
                         st.success(f"Produto aberto ({qtd})!")
                         st.rerun()
                     except ValueError as e:
@@ -133,10 +115,8 @@ try:
 
     # Lotes em uso (uma lista só — evita duplicar na seção de validade)
     st.header("🧊 Lotes em uso")
-    lotes = get_lotes_abertos_detalhados(db)
-    proximos_ids = {
-        p["lot_id"] for p in get_abertos_proximos_vencimento(db, dias=3)
-    }
+    lotes = lotes_abertos_detalhados()
+    proximos_ids = {p["lot_id"] for p in abertos_proximos_vencimento(dias=3)}
 
     if lotes:
         por_produto: dict[str, int] = {}
@@ -167,9 +147,7 @@ try:
                         c3.warning(f"{dias} dias")
                     else:
                         c3.success(f"{dias} dias")
-                    c4.caption(
-                        f"Validade: {lot['validade'].strftime('%d/%m/%Y')}"
-                    )
+                    c4.caption(f"Validade: {lot['validade'].strftime('%d/%m/%Y')}")
                 else:
                     c3.caption("Sem validade")
                 if c5.button(
@@ -178,8 +156,7 @@ try:
                     help="Registra consumo de todo o lote",
                 ):
                     try:
-                        consumir_lote_completo(db, lot["lot_id"])
-                        db.expire_all()
+                        esgotar_lote(lot["lot_id"])
                         st.success("Lote esgotado.")
                         st.rerun()
                     except ValueError as e:
@@ -190,14 +167,8 @@ try:
     # Ações rápidas
     st.header("⚙️ Ações rápidas")
 
-    produtos_ativos = (
-        db.query(Product)
-        .filter(Product.ativo.is_(True))
-        .order_by(Product.nome.asc())
-        .all()
-    )
-    opcoes = {p.nome: p.id for p in produtos_ativos}
-    lotes_abertos = get_lotes_abertos_detalhados(db)
+    opcoes = produtos_ativos_opcoes()
+    lotes_abertos = lotes_abertos_detalhados()
     lotes_por_produto: dict[int, list] = {}
     for lot in lotes_abertos:
         lotes_por_produto.setdefault(lot["product_id"], []).append(lot)
@@ -237,15 +208,12 @@ try:
             enviar = st.form_submit_button("Registrar consumo", type="primary")
         if enviar:
             try:
-                registrar_consumo(
-                    db,
+                registrar_consumo_ui(
                     pid,
                     float(qty),
-                    date.today(),
                     lot_id=lot_id,
                     observacao=obs or None,
                 )
-                db.expire_all()
                 st.success("Consumo registrado.")
                 st.rerun()
             except ValueError as e:
@@ -271,7 +239,9 @@ try:
                 )
                 if modo == "Escolher lote":
                     lot_labels = {
-                        f"Lote #{l['lot_id']} — {l['quantidade_atual']} un.": l["lot_id"]
+                        f"Lote #{l['lot_id']} — {l['quantidade_atual']} un.": l[
+                            "lot_id"
+                        ]
                         for l in lotes_prod
                     }
                     lot_id = lot_labels[
@@ -286,17 +256,14 @@ try:
             enviar = st.form_submit_button("Registrar perda", type="primary")
         if enviar:
             try:
-                registrar_perda(
-                    db,
+                registrar_perda_ui(
                     pid,
                     float(qty),
                     motivo,
-                    date.today(),
                     estoque_afetado=estoque_afetado,
                     lot_id=lot_id,
                     observacao=obs or None,
                 )
-                db.expire_all()
                 st.success("Perda registrada.")
                 st.rerun()
             except ValueError as e:
@@ -312,13 +279,11 @@ try:
         obs = st.text_input("Observação (opcional)", key="ajuste_obs")
         if st.button("Registrar ajuste", type="primary"):
             try:
-                registrar_ajuste(
-                    db,
+                registrar_ajuste_ui(
                     opcoes[nome],
                     float(qty),
                     direcao=direcao,
                     motivo=motivo,
-                    data_ajuste=date.today(),
                     observacao=obs or None,
                 )
                 st.success("Ajuste registrado.")
@@ -326,5 +291,6 @@ try:
             except ValueError as e:
                 st.error(str(e))
 
-finally:
-    db.close()
+
+except ValueError as e:
+    st.error(str(e))
